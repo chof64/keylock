@@ -1,7 +1,8 @@
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import type { DefaultSession, NextAuthConfig } from "next-auth";
-import GoogleProvider from "next-auth/providers/google";
-
+import CredentialsProvider from "next-auth/providers/credentials";
+import { z } from "zod";
+import { getUserByEmail, verifyPassword } from "~/lib/auth";
 import { db } from "~/server/db";
 
 /**
@@ -19,10 +20,11 @@ declare module "next-auth" {
     } & DefaultSession["user"];
   }
 
-  // interface User {
-  //   // ...other properties
-  //   // role: UserRole;
-  // }
+  interface User {
+    // ...other properties
+    // role: UserRole;
+    password?: string;
+  }
 }
 
 /**
@@ -32,7 +34,54 @@ declare module "next-auth" {
  */
 export const authConfig = {
   providers: [
-    GoogleProvider,
+    CredentialsProvider({
+      id: "credentials",
+      name: "Email & Password",
+      credentials: {
+        email: {
+          label: "Email",
+          type: "email",
+          placeholder: "hello@example.com",
+        },
+        password: {
+          label: "Password",
+          type: "password",
+          placeholder: "********",
+        },
+      },
+      async authorize(credentials) {
+        // Validate credentials
+        const parsedCredentials = z
+          .object({
+            email: z.string().email(),
+            password: z.string().min(6),
+          })
+          .safeParse(credentials);
+
+        if (!parsedCredentials.success) return null;
+
+        const { email, password } = parsedCredentials.data;
+
+        // Find user by email
+        const user = await getUserByEmail(email);
+
+        // If no user found or no password (might be OAuth account only)
+        if (!user || !user.password) return null;
+
+        // Verify password
+        const passwordValid = await verifyPassword(password, user.password);
+
+        // If password doesn't match
+        if (!passwordValid) return null;
+
+        return {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          image: user.image,
+        };
+      },
+    }),
     /**
      * ...add more providers here.
      *
@@ -44,6 +93,14 @@ export const authConfig = {
      */
   ],
   adapter: PrismaAdapter(db),
+  session: {
+    strategy: "jwt",
+  },
+  pages: {
+    signIn: "/signin",
+    signOut: "/signout",
+    error: "/auth/error",
+  },
   callbacks: {
     session: ({ session, user }) => ({
       ...session,
@@ -52,5 +109,24 @@ export const authConfig = {
         id: user.id,
       },
     }),
+    jwt: ({ token, user }) => {
+      if (user) {
+        token.sub = user.id;
+      }
+      return token;
+    },
+    authorized({ auth, request }) {
+      const isLoggedIn = !!auth?.user;
+      const isOnSignInPage =
+        request.nextUrl.pathname.startsWith("/signin") ||
+        request.nextUrl.pathname.startsWith("/signup");
+
+      // Redirect authenticated users away from signin/signup
+      if (isLoggedIn && isOnSignInPage) {
+        return Response.redirect(new URL("/", request.nextUrl));
+      }
+
+      return isLoggedIn;
+    },
   },
 } satisfies NextAuthConfig;
