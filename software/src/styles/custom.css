@@ -1,8 +1,28 @@
 @theme {
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif,
+  --font-sans: var(--font-mona-sans), ui-sans-serif, system-ui, sans-serif,
     "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
 }
 
 @utility container {
   @apply mx-auto max-w-screen-2xl px-6;
+}
+
+@utility typo-h1 {
+  @apply scroll-m-20 text-4xl font-bold tracking-tight;
+}
+
+@utility typo-h2 {
+  @apply scroll-m-20 text-3xl font-semibold tracking-tight first:mt-0;
+}
+
+@utility typo-h3 {
+  @apply scroll-m-20 text-2xl font-semibold tracking-tight;
+}
+
+@utility typo-h4 {
+  @apply scroll-m-20 text-xl font-semibold tracking-tight;
+}
+
+@utility typo-p {
+  @apply leading-7 [&:not(:first-child)]:mt-6;
 }
