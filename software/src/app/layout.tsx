@@ -1,8 +1,9 @@
 import "~/styles/globals.css";
 
 import type { Metadata } from "next";
-import { Geist, Mona_Sans } from "next/font/google";
+import { Mona_Sans } from "next/font/google";
 
+import Header from "~/components/Header";
 import { TRPCReactProvider } from "~/trpc/react";
 
 export const metadata: Metadata = {
@@ -24,7 +25,10 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${monaSans.variable}`}>
       <body>
-        <TRPCReactProvider>{children}</TRPCReactProvider>
+        <TRPCReactProvider>
+          <Header />
+          {children}
+        </TRPCReactProvider>
       </body>
     </html>
   );
