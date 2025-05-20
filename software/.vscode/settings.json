@@ -1,7 +1,7 @@
 {
-	"github.copilot.chat.codeGeneration.instructions": [
-		{
-			"file": ".github/generate.prompt.md"
-		}
-	]
+  "github.copilot.chat.codeGeneration.instructions": [
+    {
+      "file": ".github/generate.prompt.md"
+    }
+  ]
 }
