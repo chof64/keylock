@@ -8,13 +8,13 @@ import {
   NetworkIcon,
   RfidIcon,
   UsersIcon,
-} from "~/components/icons/index";
+} from "~/components/icons";
 import { Button } from "~/components/ui/button";
 
 export default function HomePage() {
   return (
     <main className="container my-16 max-w-6xl">
-      <section className="mt-64 flex flex-col items-center justify-center text-center">
+      <section className="mt-32 flex flex-col items-center justify-center text-center">
         <KeylockIcon className="h-32 w-32 text-indigo-600" />
         <h1 className="typo-h1 mt-6">Keylock</h1>
         <p className="mt-2 max-w-md font-semibold text-muted-foreground text-xl leading-7">
