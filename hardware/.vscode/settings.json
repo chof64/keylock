@@ -1,0 +1,8 @@
+{
+  "C_Cpp.default.compilerPath": "/Users/chof/Library/Arduino15/packages/esp32/tools/esp-x32/2411/bin/xtensa-esp32-elf-g++",
+  "github.copilot.chat.codeGeneration.instructions": [
+    {
+      "file": ".github/generate.prompt.md"
+    }
+  ]
+}

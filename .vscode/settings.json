@@ -3,5 +3,6 @@
     {
       "file": ".github/generate.prompt.md"
     }
-  ]
+  ],
+  "editor.defaultFormatter": "biomejs.biome"
 }
