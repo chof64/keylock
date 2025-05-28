@@ -19,7 +19,7 @@ Here is how the modules are connected to the ESP32 DEVKITV1:
 
 - RFID Module
   - 3V3 -- ESP:3V3
-  - RST -- ESP:D34
+  - RST -- ESP:D14
   - GND -- ESP:GND
   - IRQ -- ESP:D33
   - MISO -- ESP:D25
