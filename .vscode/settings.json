@@ -1,0 +1,10 @@
+{
+  "github.copilot.chat.codeGeneration.instructions": [
+    {
+      "file": "software/.github/generate.prompt.md",
+    },
+    {
+      "file": "hardware/.github/generate.prompt.md"
+    }
+  ]
+}
