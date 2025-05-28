@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
-import mqtt from 'mqtt';
+import mqtt from "mqtt";
+import { useEffect, useState } from "react";
 
 interface MqttMessage {
   topic: string;
@@ -12,25 +12,25 @@ interface MqttMessage {
 export default function MqttMessagesPage() {
   const [messages, setMessages] = useState<MqttMessage[]>([]);
   const [client, setClient] = useState<mqtt.MqttClient | null>(null);
-  const [connectionStatus, setConnectionStatus] = useState('Disconnected');
+  const [connectionStatus, setConnectionStatus] = useState("Disconnected");
 
   useEffect(() => {
-    const mqttClient = mqtt.connect('ws://localhost:9001'); // Connect to MQTT broker via WebSocket
+    const mqttClient = mqtt.connect("ws://localhost:9001"); // Connect to MQTT broker via WebSocket
 
-    mqttClient.on('connect', () => {
-      setConnectionStatus('Connected');
-      console.log('Connected to MQTT broker');
-      mqttClient.subscribe('devices/keylock/health', (err) => {
+    mqttClient.on("connect", () => {
+      setConnectionStatus("Connected");
+      console.log("Connected to MQTT broker");
+      mqttClient.subscribe("devices/keylock/health", (err) => {
         if (err) {
-          console.error('Subscription error:', err);
+          console.error("Subscription error:", err);
           setConnectionStatus(`Subscription error: ${err.message}`);
         } else {
-          console.log('Subscribed to devices/keylock/health');
+          console.log("Subscribed to devices/keylock/health");
         }
       });
     });
 
-    mqttClient.on('message', (topic, payload) => {
+    mqttClient.on("message", (topic, payload) => {
       const newMessage: MqttMessage = {
         topic,
         payload: payload.toString(),
@@ -39,14 +39,14 @@ export default function MqttMessagesPage() {
       setMessages((prevMessages) => [newMessage, ...prevMessages].slice(0, 50)); // Keep last 50 messages
     });
 
-    mqttClient.on('error', (err) => {
-      console.error('MQTT error:', err);
+    mqttClient.on("error", (err) => {
+      console.error("MQTT error:", err);
       setConnectionStatus(`Error: ${err.message}`);
     });
 
-    mqttClient.on('close', () => {
-      setConnectionStatus('Disconnected');
-      console.log('Disconnected from MQTT broker');
+    mqttClient.on("close", () => {
+      setConnectionStatus("Disconnected");
+      console.log("Disconnected from MQTT broker");
     });
 
     setClient(mqttClient);
@@ -60,17 +60,17 @@ export default function MqttMessagesPage() {
 
   return (
     <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">MQTT Messages</h1>
+      <h1 className="mb-4 font-bold text-2xl">MQTT Messages</h1>
       <p className="mb-2">Connection Status: {connectionStatus}</p>
-      <div className="bg-gray-100 p-4 rounded-lg shadow max-h-96 overflow-y-auto">
+      <div className="max-h-96 overflow-y-auto rounded-lg bg-gray-100 p-4 shadow">
         {messages.length === 0 && <p>No messages received yet.</p>}
         <ul>
           {messages.map((msg, index) => (
-            <li key={index} className="mb-2 p-2 border-b border-gray-200">
-              <p className="text-sm text-gray-500">
+            <li key={index} className="mb-2 border-gray-200 border-b p-2">
+              <p className="text-gray-500 text-sm">
                 {msg.timestamp.toLocaleTimeString()} - {msg.topic}
               </p>
-              <pre className="bg-white p-2 rounded text-sm whitespace-pre-wrap">
+              <pre className="whitespace-pre-wrap rounded bg-white p-2 text-sm">
                 {msg.payload}
               </pre>
             </li>

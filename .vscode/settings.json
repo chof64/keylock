@@ -1,10 +1,8 @@
 {
   "github.copilot.chat.codeGeneration.instructions": [
     {
-      "file": "software/.github/generate.prompt.md",
-    },
-    {
-      "file": "hardware/.github/generate.prompt.md"
+      "file": ".github/generate.prompt.md"
     }
-  ]
+  ],
+  "editor.defaultFormatter": "biomejs.biome"
 }
