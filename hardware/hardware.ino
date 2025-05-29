@@ -2,91 +2,110 @@
 
 // Include necessary libraries
 #include <WiFi.h>
-#include <ArduinoOTA.h>
 #include <PubSubClient.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <SPI.h>
-#include <MFRC522.h>
+// Use MFRC522v2 library
+#include <MFRC522v2.h>
+#include <MFRC522DriverSPI.h>
+#include <MFRC522DriverPinSimple.h>
+#include <MFRC522Debug.h>
 
 // Pin Definitions
 // OLED Display (0.96 inch)
-#define OLED_SDA_PIN 23
-#define OLED_SCL_PIN 22
+#define OLED_SDA_PIN 26 // D26
+#define OLED_SCL_PIN 27 // D27
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
-#define OLED_RESET    -1 // Reset pin # (or -1 if sharing Arduino reset pin)
+#define OLED_RESET -1    // Reset pin # (or -1 if sharing Arduino reset pin)
 
 // Active Buzzer
-#define BUZZER_PIN 4
+#define BUZZER_PIN 25 // D25
 
 // Mini RFID-RC522 Module
-#define RFID_RST_PIN  14 // RST
-#define RFID_SS_PIN   32 // SDA (SPI Chip Select / Slave Select)
-#define RFID_IRQ_PIN  33 // IRQ (Interrupt Request) - defined but not used in this basic example
+#define RFID_RST_PIN 21  // D21 (was 14)
+#define RFID_SS_PIN 5    // D5  (SDA on components.md, SPI SS - was 32)
+#define RFID_IRQ_PIN 33  // D33 (Not connected as per components.md, but define kept)
 // SPI Pins for RFID
-#define RFID_SCK_PIN  27 // SCK
-#define RFID_MISO_PIN 25 // MISO
-#define RFID_MOSI_PIN 26 // MOSI
+#define RFID_SCK_PIN 18  // D18 (was 27)
+#define RFID_MISO_PIN 19 // D19 (was 25)
+#define RFID_MOSI_PIN 23 // D23 (was 26)
 
 // WiFi Credentials Structure
-struct WifiNetwork {
-  const char* ssid;
-  const char* password;
+struct WifiNetwork
+{
+  const char *ssid;
+  const char *password;
 };
 
 // List of WiFi networks to connect to (in order of priority)
 // Replace with your actual Wi-Fi credentials
 WifiNetwork wifiNetworks[] = {
-{"line.chof64.me", "Passcode7-Defrost-Tanned"}
-  // Add more networks if needed, e.g.:
-  // {"HomeNetwork", "password123"},
-  // {"OfficeGuest", "guestpass"}
+    {"line.chof64.me", "Passcode7-Defrost-Tanned"},
+    {"aabbcc00xxyyzz", "a1b2c300"}
+    // Add more networks if needed, e.g.:
+    // {"HomeNetwork", "password123"},
+    // {"OfficeGuest", "guestpass"}
 };
 const int numWifiNetworks = sizeof(wifiNetworks) / sizeof(wifiNetworks[0]);
 
 // MQTT Configuration
-IPAddress mqtt_server_ip(192, 168, 1, 200); // Static IP address of the MQTT server
-const int mqtt_port = 1883;                     // MQTT server port
-const char* health_topic = "devices/keylock/health"; // MQTT topic for health checks
-IPAddress mqttServerIp; // Stores the resolved IP of the MQTT server
+IPAddress mqtt_server_ip(192, 168, 1, 200);          // Static IP address of the MQTT server
+const int mqtt_port = 1883;                          // MQTT server port
+const char *health_topic = "devices/keylock/health"; // MQTT topic for health checks
+IPAddress mqttServerIp;                              // Stores the resolved IP of the MQTT server
 
 // Global Variables
 String hostname; // Device hostname, e.g., keylock-[MAC_ADDRESS]
 
-WiFiClient espClient; // TCP client for MQTT
+WiFiClient espClient;               // TCP client for MQTT
 PubSubClient mqttClient(espClient); // MQTT client
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET); // OLED display object
-MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN); // RFID reader object
 
-unsigned long lastHealthCheckMillis = 0;    // Timestamp of the last health check
-const long healthCheckInterval = 5000;      // Interval for sending health checks (5 seconds)
-unsigned long lastMqttAttemptMillis = 0;    // Timestamp of the last MQTT connection attempt
-const long mqttRetryInterval = 15000;       // Interval for retrying MQTT connection (15 seconds)
+// RFID Reader Object - Updated for MFRC522v2
+// MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN); // Old MFRC522 object
+MFRC522DriverPinSimple ss_pin(RFID_SS_PIN); // Define SS Pin for MFRC522v2 driver
+MFRC522DriverSPI driver{ss_pin};            // Create SPI driver instance
+MFRC522 mfrc522{driver};                    // Create MFRC522 instance (was 'rfid')
 
+unsigned long lastMqttAttemptMillis = 0; // Timestamp of the last MQTT connection attempt
+const long mqttRetryInterval = 15000;    // Interval for retrying MQTT connection (15 seconds)
+
+// Global variables for MQTT Health Check
+unsigned long lastHealthCheck = 0;
+// const unsigned long healthCheckInterval = 60000; // 60 seconds health check interval
+const unsigned long healthCheckInterval = 5000; // 5 seconds health check interval
+
+// Variables for enhanced WiFi/MQTT connection logic
+int currentWifiNetworkIndex = 0;
+int mqttConnectRetryCount = 0;
+const int MAX_MQTT_RETRIES_PER_WIFI = 3;
 
 // Function Prototypes
-void setupWifi();
+bool attemptSingleWifiConnection(int networkIndex); // Changed from setupWifi
 String getMacAddressString(bool withColons = false);
 void initOLED();
 void displayOLED(String line1, String line2 = "", String line3 = "", String line4 = "", bool clear = true);
 void displayLogo();
-void setupOTA();
-void initRFID();
-void scanRFIDAndBeep();
+void initRFID(); // Declaration remains the same
+void scanRFIDAndBeep(); // Declaration remains the same
 void beepBuzzer(int duration_ms = 150, int times = 1);
-void connectMQTT();
+bool connectMQTT(); // Changed to return bool
 void publishHealthCheck();
-// void mqttCallback(char* topic, byte* payload, unsigned int length); // If subscribing
 
 // =========================================================================
 // SETUP FUNCTION - Runs once at startup
 // =========================================================================
-void setup() {
+void setup()
+{
   Serial.begin(115200);
-  while (!Serial) { delay(10); } // Wait for serial connection
+  while (!Serial)
+  {
+    delay(10);
+  } // Wait for serial connection
 
   // Initialize Buzzer Pin
   pinMode(BUZZER_PIN, OUTPUT);
@@ -94,37 +113,59 @@ void setup() {
 
   // Initialize OLED Display
   initOLED();
-  displayOLED("KeyLock System", "Initializing...");
+  displayOLED("KeyLock System", "Booting...");
   delay(1000);
 
-  // Connect to Wi-Fi
-  setupWifi();
+  bool initialWifiConnected = false;
+  for (int i = 0; i < numWifiNetworks; ++i)
+  {
+    currentWifiNetworkIndex = i;
+    WiFi.disconnect(true); // Ensure clean state before attempting
+    delay(100);            // Short delay for WiFi module
+    if (attemptSingleWifiConnection(currentWifiNetworkIndex))
+    {
+      initialWifiConnected = true;
+      Serial.println("WiFi Connected during setup!");
+      // IP Address and SSID are displayed by attemptSingleWifiConnection
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("WiFi Connected!");
-    Serial.print("IP Address: "); Serial.println(WiFi.localIP());
-    displayOLED("WiFi Connected", WiFi.localIP().toString());
-    delay(1000);
+      // Generate Hostname from MAC Address
+      String macAddr = getMacAddressString(false); // Get MAC without colons
+      macAddr.toLowerCase();
+      hostname = "keylock-" + macAddr;
+      Serial.print("Hostname: ");
+      Serial.println(hostname);
 
-    // Generate Hostname from MAC Address
-    String macAddr = getMacAddressString(false); // Get MAC without colons
-    macAddr.toLowerCase();
-    hostname = "keylock-" + macAddr;
-    Serial.print("Hostname: "); Serial.println(hostname);
+      // Initialize RFID Reader
+      initRFID();
 
-    // Setup Arduino OTA (Over-The-Air Updates)
-    setupOTA();
+      // Initial attempt to connect to MQTT broker
+      displayOLED("MQTT Connecting", mqtt_server_ip.toString(), "Setup Attempt...");
+      if (connectMQTT())
+      {
+        mqttConnectRetryCount = 0; // Reset for this Wi-Fi
+        // connectMQTT displays "MQTT Connected"
+        delay(1000);
+      }
+      else
+      {
+        // MQTT failed in setup, loop will retry
+        mqttConnectRetryCount = 1;        // Count this as the first failed attempt
+        lastMqttAttemptMillis = millis(); // Set for loop's retry interval
+        // connectMQTT displays "MQTT Failed: reason"
+        displayOLED("MQTT Setup Fail", "Will retry in loop");
+        delay(1000);
+      }
+      break; // Exit the loop once WiFi is connected
+    }
+    // If attemptSingleWifiConnection failed, it shows a message and the loop continues to the next network.
+  }
 
-    // Initialize RFID Reader
-    initRFID();
-
-    // Initial attempt to connect to MQTT broker
-    connectMQTT();
-
-  } else {
-    Serial.println("Failed to connect to any WiFi network.");
-    displayOLED("WiFi Failed", "Check Credentials", "Retrying later...");
-    // The loop will handle reconnection attempts.
+  if (!initialWifiConnected)
+  {
+    Serial.println("Failed to connect to any WiFi network during setup.");
+    displayOLED("Setup Failed", "No WiFi Available", "Retrying in loop...");
+    currentWifiNetworkIndex = 0; // Reset to start from the first network in the loop
+    delay(2000);
   }
 
   displayLogo(); // Display logo after initial setup phase
@@ -133,44 +174,71 @@ void setup() {
 // =========================================================================
 // MAIN LOOP FUNCTION - Runs repeatedly
 // =========================================================================
-void loop() {
-  if (WiFi.status() == WL_CONNECTED) {
-    ArduinoOTA.handle(); // Handle OTA update requests
-
-    // Handle MQTT connection and messages
-    if (!mqttClient.connected()) {
-      if (millis() - lastMqttAttemptMillis > mqttRetryInterval) {
-        connectMQTT(); // Attempt to reconnect to MQTT if disconnected
-        lastMqttAttemptMillis = millis();
+void loop()
+{
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    if (!mqttClient.connected())
+    {
+      Serial.println("MQTT not connected. Attempting to connect...");
+      displayOLED("MQTT Connecting", mqtt_server_ip.toString());
+      if (connectMQTT())
+      {
+        // MQTT connected, proceed with normal operations
+        lastHealthCheck = millis(); // Reset health check timer on new connection
+        publishHealthCheck();       // Publish initial health check
+      }
+      else
+      {
+        // MQTT connection failed, will retry on next loop iteration
+        // displayOLED handled by connectMQTT()
+        delay(5000); // Wait before retrying MQTT
+        displayLogo();
       }
     }
-    mqttClient.loop(); // Process MQTT messages and maintain connection
+    else
+    {
+      // Both WiFi and MQTT are connected
+      mqttClient.loop(); // Keep MQTT client alive
 
-    // Periodically publish health check information
-    if (millis() - lastHealthCheckMillis > healthCheckInterval && mqttClient.connected()) {
-      publishHealthCheck();
-      lastHealthCheckMillis = millis();
+      // Publish health check periodically
+      if (millis() - lastHealthCheck > healthCheckInterval)
+      {
+        publishHealthCheck();
+        lastHealthCheck = millis();
+      }
+
+      // Scan for RFID card
+      scanRFIDAndBeep(); // This function now handles its own display logic
     }
-
-    // Scan for RFID card and beep buzzer
-    scanRFIDAndBeep();
-
-  } else {
-    // WiFi is not connected, attempt to reconnect
-    Serial.println("WiFi disconnected. Attempting to reconnect...");
-    displayOLED("WiFi Lost", "Reconnecting...");
-    setupWifi(); // This function has its own display updates
-    if (WiFi.status() != WL_CONNECTED) {
-        displayOLED("WiFi Lost", "Check Network", "Will retry...");
-        delay(5000); // Wait before showing logo again or retrying in loop
-    }
-    displayLogo(); // Show logo while waiting for next WiFi attempt
   }
-
-  // If no specific action is updating the display, ensure the logo is shown or an idle message.
-  // The functions scanRFIDAndBeep and others manage their display changes and should restore an idle state.
-  // A brief delay to prevent tight looping if no other delays are present
-  delay(100);
+  else
+  {
+    // WiFi is not connected. Attempt to connect.
+    Serial.print("WiFi not connected. Trying network: ");
+    Serial.println(wifiNetworks[currentWifiNetworkIndex].ssid);
+    // attemptSingleWifiConnection shows "WiFi Connecting", then "WiFi Connected" or "WiFi Failed"
+    if (attemptSingleWifiConnection(currentWifiNetworkIndex))
+    {
+      // WiFi connected, hostname should be set. Attempt MQTT connection in the next loop.
+      // Display is handled by attemptSingleWifiConnection
+      // Set hostname based on MAC for MQTT client ID
+      hostname = "ESP32-" + getMacAddressString(false); // false for no colons
+      Serial.println("Hostname for MQTT: " + hostname);
+    }
+    else
+    {
+      // WiFi connection failed for the current network
+      // displayOLED is handled by attemptSingleWifiConnection
+      currentWifiNetworkIndex = (currentWifiNetworkIndex + 1) % numWifiNetworks;
+      Serial.println("Moving to next WiFi network index: " + String(currentWifiNetworkIndex));
+      displayOLED("Next WiFi Attempt", "After Delay...", String(wifiNetworks[currentWifiNetworkIndex].ssid) + " failed");
+      delay(5000); // Wait before trying the next network or re-trying
+    }
+    // After a WiFi attempt (success or fail with delay), show logo.
+    displayLogo();
+  }
+  delay(100); // Small general delay for loop stability
 }
 
 // =========================================================================
@@ -178,73 +246,56 @@ void loop() {
 // =========================================================================
 
 /**
- * @brief Initializes and connects to a Wi-Fi network from the predefined list.
+ * @brief Initializes and connects to a specific Wi-Fi network from the predefined list.
+ * @param networkIndex The index of the network in wifiNetworks array to attempt connection.
+ * @return True if connection is successful, false otherwise.
  */
-void setupWifi() {
-  Serial.println("Connecting to WiFi...");
-  displayOLED("WiFi Setup", "Connecting...");
-  WiFi.mode(WIFI_STA); // Set ESP32 to Wi-Fi station mode
-  WiFi.disconnect(); // Disconnect from any previous connection
-  delay(100);
-
-  // --- Static IP Configuration ---
-  // Replace these with your desired static IP, gateway, subnet, and DNS servers
-  // Ensure this IP is outside your router's DHCP range or reserved.
-  IPAddress local_IP(192, 168, 1, 201); // Example Static IP
-  IPAddress gateway(192, 168, 1, 1);    // Example Gateway
-  IPAddress subnet(255, 255, 255, 0);  // Example Subnet Mask
-  IPAddress primaryDNS(1, 1, 1, 1);     // Example Primary DNS (e.g., Google's DNS)
-  IPAddress secondaryDNS(1, 0, 0, 1);   // Example Secondary DNS (e.g., Google's DNS)
-  // --- End Static IP Configuration ---
-
-  for (int i = 0; i < numWifiNetworks; ++i) {
-    Serial.print("Attempting to connect to SSID: ");
-    Serial.println(wifiNetworks[i].ssid);
-    displayOLED("Connecting to:", wifiNetworks[i].ssid, "Attempt " + String(i+1) + "/" + String(numWifiNetworks));
-
-    // Configure static IP before WiFi.begin()
-    // This example applies static IP configuration for all networks in the list.
-    // You might want to make this conditional, e.g., only for a specific SSID:
-    // if (strcmp(wifiNetworks[i].ssid, "YourTargetSSIDForStaticIP") == 0) {
-    //   if (!WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS)) {
-    //     Serial.println("STA Failed to configure static IP for " + String(wifiNetworks[i].ssid));
-    //   }
-    // }
-    // For simplicity, applying to all attempts here. If you have multiple networks,
-    // consider if static IP is appropriate for all or only specific ones.
-    if (!WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS)) {
-      Serial.println("STA Failed to configure static IP. Proceeding with DHCP for this attempt might be an option or indicate an error.");
-      // Depending on desired behavior, you might display an error or attempt DHCP
-      // For this example, we'll proceed, but WiFi.begin might override or fail differently.
-    }
-
-    WiFi.begin(wifiNetworks[i].ssid, wifiNetworks[i].password);
-
-    unsigned long startTime = millis();
-    // Wait for connection (timeout: 15 seconds per network)
-    while (WiFi.status() != WL_CONNECTED && (millis() - startTime < 15000)) {
-      Serial.print(".");
-      delay(500);
-    }
-    Serial.println();
-
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.print("Successfully connected to "); Serial.println(wifiNetworks[i].ssid);
-      Serial.print("IP Address: "); Serial.println(WiFi.localIP());
-      displayOLED("WiFi Connected!", WiFi.localIP().toString(), wifiNetworks[i].ssid);
-      delay(2000);
-      return; // Exit function once connected
-    } else {
-      Serial.println("Failed to connect.");
-      displayOLED("Connection Failed", wifiNetworks[i].ssid, "Trying next...");
-      WiFi.disconnect(true); // Disconnect and erase credentials for this attempt
-      delay(1000);
-    }
+bool attemptSingleWifiConnection(int networkIndex)
+{
+  if (networkIndex < 0 || networkIndex >= numWifiNetworks)
+  {
+    Serial.println("Invalid network index for WiFi connection attempt.");
+    displayOLED("WiFi Error", "Invalid Index", String(networkIndex));
+    delay(1500);
+    return false;
   }
 
-  Serial.println("Could not connect to any WiFi network.");
-  displayOLED("WiFi Failed", "No Network Found", "Check Config");
-  // Further attempts will be made in the main loop or by restarting
+  Serial.print("Attempting WiFi connection to: ");
+  Serial.println(wifiNetworks[networkIndex].ssid);
+  displayOLED("WiFi Connecting", wifiNetworks[networkIndex].ssid, "IP: DHCP..."); // Changed to DHCP
+
+  WiFi.mode(WIFI_STA);
+  delay(100); // Allow time for mode change or previous disconnect
+
+  WiFi.begin(wifiNetworks[networkIndex].ssid, wifiNetworks[networkIndex].password);
+
+  unsigned long startTime = millis();
+  // Wait for connection (timeout: 15 seconds per network)
+  while (WiFi.status() != WL_CONNECTED && (millis() - startTime < 15000))
+  {
+    Serial.print(".");
+    delay(500);
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    Serial.print("Successfully connected to ");
+    Serial.println(wifiNetworks[networkIndex].ssid);
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+    displayOLED("WiFi Connected!", WiFi.localIP().toString(), wifiNetworks[networkIndex].ssid);
+    delay(1500); // Show success message
+    return true; // Exit function once connected
+  }
+  else
+  {
+    Serial.println("Failed to connect to " + String(wifiNetworks[networkIndex].ssid));
+    displayOLED("WiFi Failed", wifiNetworks[networkIndex].ssid, "Timeout/Error");
+    WiFi.disconnect(true); // Clean up this attempt
+    delay(1500);           // Show failure message
+    return false;
+  }
 }
 
 /**
@@ -252,9 +303,11 @@ void setupWifi() {
  * @param withColons True to include colons (e.g., AA:BB:CC:DD:EE:FF), false for no colons.
  * @return String containing the MAC address.
  */
-String getMacAddressString(bool withColons) {
+String getMacAddressString(bool withColons)
+{
   String mac = WiFi.macAddress();
-  if (!withColons) {
+  if (!withColons)
+  {
     mac.replace(":", "");
   }
   return mac;
@@ -263,19 +316,22 @@ String getMacAddressString(bool withColons) {
 /**
  * @brief Initializes the OLED display.
  */
-void initOLED() {
+void initOLED()
+{
   // Initialize I2C communication for OLED with specified SDA and SCL pins
   Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
 
-  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // I2C address 0x3C for 128x64 OLED
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C))
+  { // I2C address 0x3C for 128x64 OLED
     Serial.println(F("SSD1306 allocation failed"));
     // Loop forever if OLED initialization fails
-    for(;;);
+    for (;;)
+      ;
   }
   display.clearDisplay();
-  display.setTextSize(1);      // Default text size
+  display.setTextSize(1);              // Default text size
   display.setTextColor(SSD1306_WHITE); // White text on black background
-  display.setCursor(0,0);
+  display.setCursor(0, 0);
   display.println(F("OLED Initialized"));
   display.display();
   delay(500); // Show message briefly
@@ -289,18 +345,32 @@ void initOLED() {
  * @param line4 Text for the fourth line (optional).
  * @param clear Clear display before writing.
  */
-void displayOLED(String line1, String line2, String line3, String line4, bool clear) {
-  if (clear) {
+void displayOLED(String line1, String line2, String line3, String line4, bool clear)
+{
+  if (clear)
+  {
     display.clearDisplay();
   }
-  display.setTextSize(1);             // Use small text size for messages
+  display.setTextSize(1); // Use small text size for messages
   display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0,0);
+  display.setCursor(0, 0);
 
-  if (line1 != "") { display.println(line1); }
-  if (line2 != "") { display.println(line2); }
-  if (line3 != "") { display.println(line3); }
-  if (line4 != "") { display.println(line4); }
+  if (line1 != "")
+  {
+    display.println(line1);
+  }
+  if (line2 != "")
+  {
+    display.println(line2);
+  }
+  if (line3 != "")
+  {
+    display.println(line3);
+  }
+  if (line4 != "")
+  {
+    display.println(line4);
+  }
 
   display.display();
 }
@@ -308,7 +378,8 @@ void displayOLED(String line1, String line2, String line3, String line4, bool cl
 /**
  * @brief Displays the KeyLock logo and system status on the OLED.
  */
-void displayLogo() {
+void displayLogo()
+{
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE); // Set color for all drawing operations
 
@@ -329,170 +400,162 @@ void displayLogo() {
   // P3: (-4, -2) corresponding to SVG (8, 10)
   // P4: (-2, 4)  corresponding to SVG (10, 16)
 
-  float scaleFactor = (float)logoRadius / 10.0; // Scale based on OLED logo radius vs SVG radius
+  float scaleFactor = (float)logoRadius / 10.0;
 
-  int16_t p1x = logoCenterX + static_cast<int16_t>(round(0 * scaleFactor));
-  int16_t p1y = logoCenterY + static_cast<int16_t>(round(3 * scaleFactor));
+  // Calculate scaled coordinates relative to logoCenterX, logoCenterY
+  // Note: Y is inverted in display coordinates (positive Y is down)
+  int16_t x1 = logoCenterX + (0 * scaleFactor);
+  int16_t y1 = logoCenterY + (3 * scaleFactor);
+  int16_t x2 = logoCenterX + (3 * scaleFactor);
+  int16_t y2 = logoCenterY + (-4 * scaleFactor);
+  int16_t x3 = logoCenterX + (-4 * scaleFactor);
+  int16_t y3 = logoCenterY + (-2 * scaleFactor);
+  int16_t x4 = logoCenterX + (-2 * scaleFactor);
+  int16_t y4 = logoCenterY + (4 * scaleFactor);
 
-  int16_t p2x = logoCenterX + static_cast<int16_t>(round(3 * scaleFactor));
-  int16_t p2y = logoCenterY + static_cast<int16_t>(round(-4 * scaleFactor));
+  // Draw the key shape (a quadrilateral)
+  display.drawLine(x1, y1, x2, y2, SSD1306_WHITE);
+  display.drawLine(x2, y2, x3, y3, SSD1306_WHITE);
+  display.drawLine(x3, y3, x4, y4, SSD1306_WHITE);
+  display.drawLine(x4, y4, x1, y1, SSD1306_WHITE);
 
-  int16_t p3x = logoCenterX + static_cast<int16_t>(round(-4 * scaleFactor));
-  int16_t p3y = logoCenterY + static_cast<int16_t>(round(-2 * scaleFactor));
+  // Draw a small circle for the keyhole
+  display.fillCircle(logoCenterX, logoCenterY - (logoRadius / 3), 3, SSD1306_WHITE);
 
-  int16_t p4x = logoCenterX + static_cast<int16_t>(round(-2 * scaleFactor));
-  int16_t p4y = logoCenterY + static_cast<int16_t>(round(4 * scaleFactor));
-
-  // Draw inner key shape (as two filled triangles to form the quadrilateral P1-P2-P3-P4)
-  display.fillTriangle(p1x, p1y, p2x, p2y, p3x, p3y, SSD1306_WHITE);
-  display.fillTriangle(p1x, p1y, p3x, p3y, p4x, p4y, SSD1306_WHITE);
-
-  // Status text display
+  // Display status text below the logo
   display.setTextSize(1);
-  // Position text below the logo (bottom of circle is logoCenterY + logoRadius)
-  int16_t textYPosition = logoCenterY + logoRadius + 3; // Start text a few pixels below logo
-  if (textYPosition > SCREEN_HEIGHT - 16) { // Ensure space for two lines (8px height each)
-      textYPosition = SCREEN_HEIGHT - 16;
+  display.setCursor(0, SCREEN_HEIGHT - 16); // Position for two lines of text at the bottom
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    display.print("IP: ");
+    display.println(WiFi.localIP().toString());
+    if (mqttClient.connected())
+    {
+      display.println("MQTT: Connected");
+    }
+    else
+    {
+      display.println("MQTT: Disconnected");
+    }
   }
-   // Fallback if calculation is too low, ensure it's reasonably placed
-  if (textYPosition < 47) textYPosition = 47;
-
-
-  if (WiFi.status() == WL_CONNECTED) {
-    // Center hostname text
-    int16_t textWidthHostname = hostname.length() * 6; // Approx width: num_chars * 6px/char for size 1
-    int16_t textXHostname = (SCREEN_WIDTH - textWidthHostname) / 2;
-    if (textXHostname < 0) textXHostname = 0; // Prevent negative X coordinate
-    display.setCursor(textXHostname, textYPosition);
-    display.println(hostname);
-
-    // Center IP address text
-    String ipText = "IP: " + WiFi.localIP().toString();
-    int16_t textWidthIP = ipText.length() * 6;
-    int16_t textXIP = (SCREEN_WIDTH - textWidthIP) / 2;
-    if (textXIP < 0) textXIP = 0;
-    display.setCursor(textXIP, textYPosition + 8); // Position on the next line
-    display.println(ipText);
-  } else {
-    // Center "SYSTEM OFFLINE"
-    String offlineMsg1 = "SYSTEM OFFLINE";
-    int16_t textWidthOffline1 = offlineMsg1.length() * 6;
-    int16_t textXOffline1 = (SCREEN_WIDTH - textWidthOffline1) / 2;
-    if (textXOffline1 < 0) textXOffline1 = 0;
-    display.setCursor(textXOffline1, textYPosition);
-    display.println(F("SYSTEM OFFLINE"));
-
-    // Center "Awaiting Network..."
-    String offlineMsg2 = "Awaiting Network...";
-    int16_t textWidthOffline2 = offlineMsg2.length() * 6;
-    int16_t textXOffline2 = (SCREEN_WIDTH - textWidthOffline2) / 2;
-    if (textXOffline2 < 0) textXOffline2 = 0;
-    display.setCursor(textXOffline2, textYPosition + 8); // Position on the next line
-    display.println(F("Awaiting Network..."));
+  else
+  {
+    display.println("WiFi: Disconnected");
+    display.println("Status: Offline");
   }
   display.display();
 }
 
 /**
- * @brief Sets up Arduino OTA for wireless sketch uploads.
- */
-void setupOTA() {
-  ArduinoOTA.setHostname(hostname.c_str()); // Set OTA hostname
-
-  ArduinoOTA
-    .onStart([]() {
-      String type;
-      if (ArduinoOTA.getCommand() == U_FLASH) type = "sketch";
-      else type = "filesystem"; // U_SPIFFS
-      Serial.println("Start updating " + type);
-      displayOLED("OTA Update", "Receiving " + type + "...", "Do Not Power Off!");
-      mqttClient.disconnect(); // Disconnect MQTT during OTA
-    })
-    .onEnd([]() {
-      Serial.println("End");
-      displayOLED("OTA Update", "Update Finished!", "Rebooting...");
-      delay(1000);
-    })
-    .onProgress([](unsigned int progress, unsigned int total) {
-      Serial.printf("Progress: %u%%", (progress / (total / 100)));
-      char progressStr[20];
-      sprintf(progressStr, "Progress: %u%%", (progress / (total / 100)));
-      displayOLED("OTA Update", progressStr, "", "", false); // Don't clear, update progress line
-    })
-    .onError([](ota_error_t error) {
-      Serial.printf("Error[%u]: ", error);
-      String errorMsg = "OTA Error: ";
-      if (error == OTA_AUTH_ERROR) { Serial.println("Auth Failed"); errorMsg += "Auth"; }
-      else if (error == OTA_BEGIN_ERROR) { Serial.println("Begin Failed"); errorMsg += "Begin"; }
-      else if (error == OTA_CONNECT_ERROR) { Serial.println("Connect Failed"); errorMsg += "Connect"; }
-      else if (error == OTA_RECEIVE_ERROR) { Serial.println("Receive Failed"); errorMsg += "Receive"; }
-      else if (error == OTA_END_ERROR) { Serial.println("End Failed"); errorMsg += "End"; }
-      displayOLED("OTA Error", errorMsg, "Please Retry");
-      delay(2000);
-      displayLogo(); // Revert to logo on error
-    });
-
-  ArduinoOTA.begin();
-  Serial.println("ArduinoOTA initialized. Ready for updates.");
-}
-
-/**
  * @brief Initializes the RFID reader.
  */
-void initRFID() {
-  // Configure SPI bus for RFID module with specified pins
-  // The MFRC522 library constructor already knows the SS pin.
-  SPI.begin(RFID_SCK_PIN, RFID_MISO_PIN, RFID_MOSI_PIN); // RFID_SS_PIN removed from here
+void initRFID()
+{
+  Serial.println("Initializing RFID reader (MFRC522v2)...");
+  displayOLED("RFID Setup", "SPI Init (v2)...");
 
-  rfid.PCD_Init(); // Initialize MFRC522 PCD (Proximity Coupling Device)
-  delay(4);        // Small delay recommended after init
-  rfid.PCD_DumpVersionToSerial(); // Print RFID reader version details to Serial
-  Serial.println(F("RFID Initialized. Scan a card to see UID."));
-  displayOLED(hostname, "RFID Ready", "Scan Card...");
-  delay(1000);
+  // Initialize SPI communication with custom pins.
+  SPI.begin(RFID_SCK_PIN, RFID_MISO_PIN, RFID_MOSI_PIN);
+  // Serial.println("SPI communication for RFID initialized with custom pins."); // Reduced verbosity
+  displayOLED("RFID Setup", "PCD Init (v2)...");
+  delay(100);
+
+  mfrc522.PCD_Init(); // Initialize MFRC522 board
+  // Serial.println("MFRC522 PCD_Init() called."); // Reduced verbosity
+  delay(50);
+
+  // Perform self-test (retained from original logic)
+  Serial.println("Performing MFRC522 self-test (v2)...");
+  displayOLED("RFID Setup", "Self-Test (v2)...");
+  bool selfTestResult = mfrc522.PCD_PerformSelfTest();
+  if (selfTestResult)
+  {
+    Serial.println(F("MFRC522 Self-Test (v2): PASSED"));
+    displayOLED("RFID Self-Test", "Result: PASSED", "(MFRC522v2)");
+  }
+  else
+  {
+    Serial.println(F("MFRC522 Self-Test (v2): FAILED"));
+    Serial.println(F("WARNING: RFID reader may not be functioning correctly."));
+    displayOLED("RFID Self-Test", "Result: FAILED!", "(MFRC522v2)", "Check Wiring!");
+    // Consider a more serious error handling here if self-test is critical
+  }
+  delay(1500); // Show self-test result
+
+  // Show details of PCD - MFRC522 Card Reader details on Serial Monitor
+  displayOLED("RFID Setup", "Version Info...");
+  // Serial.println(F("Dumping MFRC522 version and details (MFRC522v2):")); // Reduced verbosity
+  // MFRC522Debug::PCD_DumpVersionToSerial(mfrc522, Serial); // Reduced verbosity
+
+  // The specific version register check for OLED has been removed due to compilation issues.
+  // The self-test provides an indication of RFID module health.
+  // If more detailed version info is needed, uncomment PCD_DumpVersionToSerial above and check Serial Monitor.
+
+  // delay(2000); // Delay was for showing version, can be reduced or removed if self-test display is sufficient
+  Serial.println(F("RFID reader (MFRC522v2) initialized post self-test.")); // Adjusted message
 }
 
+unsigned long lastRFIDScanMessageTime = 0;
+const unsigned long rfidScanMessageInterval = 5000; // Print message every 5 seconds
+
 /**
- * @brief Scans for an RFID card and beeps the buzzer if a card is detected.
+ * @brief Scans for an RFID card/tag and beeps the buzzer if detected.
+ *        Also displays card UID on OLED.
  */
-void scanRFIDAndBeep() {
-  // Look for new RFID cards
-  if (!rfid.PICC_IsNewCardPresent()) {
-    return; // No new card present
+void scanRFIDAndBeep()
+{
+  // Try to detect a new card
+  if (!mfrc522.PICC_IsNewCardPresent())
+  {
+    // No new card detected by PICC_IsNewCardPresent()
+    // Periodically print a message to serial to show that scanning is active
+    if (millis() - lastRFIDScanMessageTime > rfidScanMessageInterval)
+    {
+      // Serial.println("RFID (v2): Actively scanning for cards... (PICC_IsNewCardPresent() returned false)"); // Reduced verbosity
+      lastRFIDScanMessageTime = millis();
+    }
+    return; // Nothing to do if no new card
   }
+  // Serial.println("RFID (v2): New card detected by PICC_IsNewCardPresent()."); // Reduced verbosity
 
-  // Select one of the cards
-  if (!rfid.PICC_ReadCardSerial()) {
-    return; // Failed to read card serial
+  // Attempt to read the card serial number
+  if (!mfrc522.PICC_ReadCardSerial())
+  {
+    Serial.println("RFID (v2): Card read failed."); // Reduced verbosity
+    // Optionally display an error on OLED if read fails after card is present
+    // displayOLED("RFID Error", "Read Failed");
+    // delay(1000);
+    // displayLogo();
+    // mfrc522.PICC_HaltA(); // Halt PICC before returning if needed, though DumpToSerial does this.
+    return; // Failed to read serial
   }
+  // Serial.println("RFID (v2): Card UID read successfully by PICC_ReadCardSerial()."); // Reduced verbosity
 
-  // Card detected and read successfully
-  Serial.print(F("Card UID:"));
-  String uid = "";
-  for (byte i = 0; i < rfid.uid.size; i++) {
-    Serial.print(rfid.uid.uidByte[i] < 0x10 ? " 0" : " "); // Add leading zero if needed
-    Serial.print(rfid.uid.uidByte[i], HEX);
-    uid += String(rfid.uid.uidByte[i] < 0x10 ? "0" : ""); // Append byte to UID string
-    uid += String(rfid.uid.uidByte[i], HEX);
+  // Construct UID string for display and other uses
+  String uidString = "";
+  Serial.print("Card UID (v2):");
+  for (byte i = 0; i < mfrc522.uid.size; i++)
+  {
+    Serial.print(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " "); // Add leading zero for single hex digit
+    Serial.print(mfrc522.uid.uidByte[i], HEX);
+    uidString += (mfrc522.uid.uidByte[i] < 0x10 ? "0" : ""); // Add leading zero for String
+    uidString += String(mfrc522.uid.uidByte[i], HEX);
   }
-  uid.toUpperCase();
   Serial.println();
-  Serial.print(F("PICC type: "));
-  MFRC522::PICC_Type piccType = rfid.PICC_GetType(rfid.uid.sak);
-  Serial.println(rfid.PICC_GetTypeName(piccType));
+  uidString.toUpperCase();
 
-  // Display card information on OLED
-  displayOLED("Card Scanned!", "UID: " + uid.substring(0,8), uid.substring(8)); // Display first part of UID
+  displayOLED("Card Detected!", "UID:", uidString);
+  beepBuzzer(200, 2); // Beep twice for 200ms each
 
-  // Beep the buzzer
-  beepBuzzer(150, 2); // Beep twice for 150ms each
+  // Dump card details to Serial monitor (includes PICC_HaltA)
+  // Serial.println(F("Dumping card details to Serial (MFRC522v2):")); // Reduced verbosity
+  // MFRC522Debug::PICC_DumpToSerial(mfrc522, Serial, &(mfrc522.uid)); // Reduced verbosity
+  // PICC_HaltA() is automatically called by PICC_DumpToSerial.
+  // PCD_StopCrypto1() is not present in the example and typically not needed for basic UID reading.
 
-  // Halt PICC (Proximity Integrated Circuit Card) and stop encryption
-  rfid.PICC_HaltA();
-  rfid.PCD_StopCrypto1();
-
-  delay(2000); // Display card info on OLED for a few seconds
-  displayLogo(); // Revert to logo/idle screen
+  delay(2000);   // Display UID on OLED for 2 seconds
+  displayLogo(); // Return to logo/status screen
+  lastRFIDScanMessageTime = millis(); // Reset scan message timer as a card was processed
 }
 
 /**
@@ -500,136 +563,124 @@ void scanRFIDAndBeep() {
  * @param duration_ms Duration of each beep in milliseconds.
  * @param times Number of beeps.
  */
-void beepBuzzer(int duration_ms, int times) {
-  for (int i = 0; i < times; i++) {
-    digitalWrite(BUZZER_PIN, HIGH); // Turn buzzer on
+void beepBuzzer(int duration_ms, int times)
+{
+  for (int i = 0; i < times; i++)
+  {
+    digitalWrite(BUZZER_PIN, HIGH);
     delay(duration_ms);
-    digitalWrite(BUZZER_PIN, LOW);  // Turn buzzer off
-    if (i < times - 1) {
+    digitalWrite(BUZZER_PIN, LOW);
+    if (i < times - 1)
+    {
       delay(duration_ms / 2); // Pause between beeps
     }
   }
 }
 
 /**
- * @brief Connects to the MQTT broker. Uses mDNS to resolve server IP.
+ * @brief Connects to the MQTT broker.
+ * @return True if connection is successful, false otherwise.
  */
-void connectMQTT() {
-  if (!WiFi.isConnected()) {
-    Serial.println("MQTT: WiFi not connected. Cannot connect.");
-    return;
+bool connectMQTT()
+{
+  // Caller should handle display for retries. This function displays final success/failure.
+
+  mqttServerIp = mqtt_server_ip; // Using the predefined IP
+  mqttClient.setServer(mqttServerIp, mqtt_port);
+
+  // Attempt to connect with a unique client ID (hostname)
+  if (hostname == "")
+  { // Safety check if hostname wasn\'t set (e.g. WiFi never connected in setup)
+    Serial.println("Hostname not set, cannot connect to MQTT yet.");
+    displayOLED("MQTT Error", "Hostname Missing", "Check WiFi");
+    delay(1500);
+    return false;
   }
 
-  Serial.print("Attempting MQTT connection to static IP: "); Serial.println(mqtt_server_ip);
-  displayOLED(hostname, "MQTT Connecting", "Server: " + mqtt_server_ip.toString());
-
-  // Directly use the static IP
-  mqttClient.setServer(mqtt_server_ip, mqtt_port);
-  // mqttClient.setCallback(mqttCallback); // Set callback if subscribing to topics
-
-  String clientId = hostname + "-client-" + String(random(0xffff), HEX); // Unique client ID
-  Serial.print("Connecting to MQTT with Client ID: "); Serial.println(clientId);
-
-  if (mqttClient.connect(clientId.c_str())) {
+  if (mqttClient.connect(hostname.c_str()))
+  {
     Serial.println("MQTT connected!");
-    displayOLED(hostname, "MQTT Connected!", mqttServerIp.toString());
-    // Example: Subscribe to a topic after connecting
-    // mqttClient.subscribe("devices/keylock/command");
-  } else {
-    Serial.print("MQTT connection failed, rc="); Serial.print(mqttClient.state());
-    String errorStr = "Code: " + String(mqttClient.state());
-    // MQTT Paho error codes:
-    // -4 : MQTT_CONNECTION_TIMEOUT - The server didn't respond within the keepalive time.
-    // -3 : MQTT_CONNECTION_LOST - The network connection was broken.
-    // -2 : MQTT_CONNECT_FAILED - The network connection failed.
-    // -1 : MQTT_DISCONNECTED - The client is disconnected cleanly.
-    // 0 : MQTT_CONNECTED - The client is connected.
-    // 1 : MQTT_CONNECT_BAD_PROTOCOL - The server doesn't support the requested version of MQTT.
-    // 2 : MQTT_CONNECT_BAD_CLIENT_ID - The server rejected the client identifier.
-    // 3 : MQTT_CONNECT_UNAVAILABLE - The server was unable to accept the connection.
-    // 4 : MQTT_CONNECT_BAD_CREDENTIALS - The username/password were rejected.
-    // 5 : MQTT_CONNECT_UNAUTHORIZED - The client was not authorized to connect.
-    displayOLED(hostname, "MQTT Failed", errorStr);
-    Serial.println(" Will try again later.");
-  }
-  delay(1500); // Show status briefly
-  displayLogo(); // Revert to logo screen
-}
-
-/**
- * @brief Publishes health check information to the MQTT broker.
- */
-void publishHealthCheck() {
-  if (!mqttClient.connected()) {
-    Serial.println("MQTT not connected. Cannot publish health check.");
-    return; // Added return to prevent publishing if not connected
-  }
-
-  char healthPayload[256]; // Buffer for JSON payload
-  String mac = getMacAddressString(true); // MAC address with colons
-  String ip = WiFi.localIP().toString();  // Current IP address
-  long rssi = WiFi.RSSI();                // WiFi signal strength
-  uint32_t freeHeap = ESP.getFreeHeap();  // Free heap memory
-  uint32_t uptime_s = millis() / 1000;    // Uptime in seconds
-
-
-  // Create JSON payload with escaped quotes for internal strings
-  snprintf(healthPayload, sizeof(healthPayload),
-           "{\"hostname\":\"%s\",\"macAddress\":\"%s\",\"ipAddress\":\"%s\",\"rssi\":%ld,\"freeHeap\":%u,\"uptime_s\":%u,\"firmware\":\"1.0.0\"}",
-           hostname.c_str(),
-           mac.c_str(),
-           ip.c_str(),
-           rssi,
-           freeHeap,
-           uptime_s
-          );
-
-  Serial.print("Publishing health check to "); Serial.print(health_topic); Serial.print(": "); Serial.println(healthPayload);
-
-  if (mqttClient.publish(health_topic, healthPayload, true /*retained*/)) {
-    Serial.println("Health check published successfully.");
-    // Optionally update display, but might be too frequent for a primary status
-    // displayOLED(hostname, "Health Sent", ip, "", false); // Update without clearing
-    // delay(500); displayLogo();
-  } else {
-    Serial.println("Failed to publish health check.");
-    displayOLED(hostname, "Health Send Fail", "Check MQTT Broker");
+    displayOLED("MQTT Connected", mqtt_server_ip.toString());
     delay(1000);
-    displayLogo();
+    return true;
+  }
+  else
+  {
+    Serial.print("MQTT connection failed, rc=");
+    Serial.print(mqttClient.state());
+    String errorMsg = "MQTT Failed: ";
+    switch (mqttClient.state())
+    {
+    case MQTT_CONNECTION_TIMEOUT:
+      errorMsg += "Timeout";
+      break;
+    case MQTT_CONNECTION_LOST:
+      errorMsg += "Lost";
+      break;
+    case MQTT_CONNECT_FAILED:
+      errorMsg += "Connect Failed";
+      break;
+    case MQTT_DISCONNECTED:
+      errorMsg += "Disconnected";
+      break;
+    case MQTT_CONNECT_BAD_PROTOCOL:
+      errorMsg += "Bad Protocol";
+      break;
+    case MQTT_CONNECT_BAD_CLIENT_ID:
+      errorMsg += "Bad Client ID";
+      break;
+    case MQTT_CONNECT_UNAVAILABLE:
+      errorMsg += "Unavailable";
+      break;
+    case MQTT_CONNECT_BAD_CREDENTIALS:
+      errorMsg += "Bad Credentials";
+      break;
+    case MQTT_CONNECT_UNAUTHORIZED:
+      errorMsg += "Unauthorized";
+      break;
+    default:
+      errorMsg += "Unknown (" + String(mqttClient.state()) + ")";
+      break;
+    }
+    Serial.println(" " + errorMsg);
+    displayOLED(errorMsg, mqtt_server_ip.toString(), "Will retry...");
+    delay(1500); // Show error briefly
+    return false;
   }
 }
 
 /**
- * @brief Callback function for handling incoming MQTT messages (if subscribed).
- * @param topic The topic of the incoming message.
- * @param payload The message payload.
- * @param length The length of the payload.
+ * @brief Publishes a health check message to the MQTT broker.
  */
-/*
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  String message;
-  for (int i = 0; i < length; i++) {
-    message += (char)payload[i];
-  }
-  Serial.println(message);
-  displayOLED("MQTT Message", topic, message.substring(0,18)); // Display first part of message
+void publishHealthCheck()
+{
+  if (mqttClient.connected())
+  {
+    char payloadBuffer[256]; // Increased buffer size for longer payload
+    String ipStr = WiFi.localIP().toString();
+    long rssiVal = WiFi.RSSI();
+    unsigned long uptimeVal = millis() / 1000;
+    String nodeIdStr = hostname; // Use the global hostname as nodeId
+    String nameStr = hostname;   // Use the global hostname as name, or a custom name
 
-  // Example: Handle commands from a specific topic
-  if (String(topic) == "devices/keylock/command") {
-    if (message == "OPEN_DOOR") {
-      Serial.println("Received OPEN_DOOR command.");
-      // Code to open door
-      beepBuzzer(100, 3); // Acknowledge command
-    } else if (message == "LOCK_DOOR") {
-      Serial.println("Received LOCK_DOOR command.");
-      // Code to lock door
-       beepBuzzer(50, 1);
+    // Format the JSON string into the buffer, including nodeId and name
+    sprintf(payloadBuffer, "{\"nodeId\":\"%s\",\"name\":\"%s\",\"status\":\"online\",\"ip\":\"%s\",\"rssi\":%ld,\"uptime\":%lu}",
+            nodeIdStr.c_str(),
+            nameStr.c_str(),
+            ipStr.c_str(),
+            rssiVal,
+            uptimeVal);
+
+    if (mqttClient.publish(health_topic, payloadBuffer))
+    {
+      Serial.println("Health check published: " + String(payloadBuffer));
+    }
+    else
+    {
+      Serial.println("Failed to publish health check.");
+      displayOLED("MQTT Publish Fail", "Health Check", "", "", true);
+      delay(1000);
+      displayLogo();
     }
   }
-  delay(2000);
-  displayLogo();
 }
-*/
