@@ -23,8 +23,33 @@ export const keyUsersRouter = createTRPCRouter({
   list: publicProcedure.query(async ({ ctx }) => {
     return db.keyUser.findMany({
       orderBy: { createdAt: "desc" },
+      include: {
+        key: true, // Include the related Key record
+      },
     });
   }),
+
+  // Procedure to create a new key for a user
+  createKey: publicProcedure
+    .input(
+      z.object({
+        keyUserId: z.string(),
+        keyId: z.string().min(1), // RFID tag ID
+        name: z.string().optional(), // Optional friendly name for the key
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      // In a real scenario, you might want to check if the keyId is already in use
+      // or if the user already has a key.
+      return db.key.create({
+        data: {
+          keyId: input.keyId,
+          name: input.name,
+          keyUserId: input.keyUserId,
+          isActive: true,
+        },
+      });
+    }),
 
   // Future procedures:
   // getById: publicProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
