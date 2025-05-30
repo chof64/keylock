@@ -92,35 +92,38 @@ export default function KeyUsersPage() {
   const listNodesQuery = api.nodes.getAll.useQuery(); // Fetch nodes
 
   // tRPC query to get the scanned RFID tag
-  const { data: scannedTagData, error: scannedTagError } =
-    api.keyUsers.getScannedRfidTag.useQuery(
-      { nodeId: selectedNodeIdForScan || "" }, // Provide a default empty string if undefined
-      {
-        enabled: !!selectedNodeIdForScan && isListeningForScan, // Only run when a node is selected and we are actively listening
-        refetchInterval: 1000, // Poll every 1 second
-        // onSuccess and onError removed from here
-      },
-    );
+  const {
+    data: scannedTagData,
+    error: scannedTagError,
+    isFetching,
+  } = api.keyUsers.getScannedRfidTag.useQuery(
+    { nodeId: selectedNodeIdForScan || "" }, // Provide a default empty string if undefined
+    {
+      enabled: !!selectedNodeIdForScan && isListeningForScan, // Only run when a node is selected and we are actively listening
+      refetchInterval: 1000, // Poll every 1 second
+      // onSuccess and onError removed from here
+    },
+  );
 
   // useEffect to handle successful data fetching for getScannedTagQuery
   useEffect(() => {
-    if (scannedTagData?.rfidTagId) {
+    // Only update if we are actively listening, not currently fetching, AND a new tag ID is present.
+    if (isListeningForScan && !isFetching && scannedTagData?.rfidTagId) {
       setRfidTagIdFromScan(scannedTagData.rfidTagId);
-      setIsListeningForScan(false); // Stop polling once tag is received
+      setIsListeningForScan(false); // Stop polling once a new tag is received
       toast.success(`RFID Tag Scanned: ${scannedTagData.rfidTagId}`);
     }
-  }, [scannedTagData]); // Dependency: run when scannedTagData changes
+    // If listening, not fetching, and server returns null (no tag), continue polling.
+  }, [scannedTagData, isListeningForScan, isFetching]); // Add isFetching to dependencies
 
   // useEffect to handle errors from getScannedTagQuery
   useEffect(() => {
-    if (scannedTagError) {
-      if (isListeningForScan) {
-        // console.warn(`Polling for RFID tag: ${scannedTagError.message}`);
-      } else {
-        toast.error(`Error fetching RFID tag: ${scannedTagError.message}`);
-      }
+    // Only process errors if we were actively listening and the fetch attempt has completed.
+    if (scannedTagError && isListeningForScan && !isFetching) {
+      toast.error(`Error during RFID scan: ${scannedTagError.message}`);
+      setIsListeningForScan(false); // Stop listening on error
     }
-  }, [scannedTagError, isListeningForScan]); // Dependencies: run when scannedTagError or isListeningForScan changes
+  }, [scannedTagError, isListeningForScan, isFetching]); // Add isFetching to dependencies
 
   const createKeyUserMutation = api.keyUsers.create.useMutation({
     onSuccess: () => {
@@ -185,30 +188,44 @@ export default function KeyUsersPage() {
 
   const openCreateKeyDialog = (user: KeyUser) => {
     setSelectedKeyUserId(user.id);
-    setRfidTagIdFromScan(null);
-    setIsListeningForScan(false);
+    setRfidTagIdFromScan(null); // Reset local display of any previous scan
+    setIsListeningForScan(false); // Ensure polling is off
+    setSelectedNodeIdForScan(undefined); // Reset selected node to force re-selection
+    setIsCreateKeyDialogOpen(true);
+  };
 
-    if (selectedNodeIdForScan) {
+  const handleNodeSelectionChange = (nodeId: string | undefined) => {
+    setSelectedNodeIdForScan(nodeId);
+    setRfidTagIdFromScan(null); // Reset any previous scan result for the new node
+    setIsListeningForScan(false); // Stop listening, user needs to press "Start Scan" again
+
+    if (nodeId) {
       clearCacheMutation.mutate(
-        { nodeId: selectedNodeIdForScan },
+        { nodeId },
         {
           onSuccess: () => {
+            const nodeName =
+              listNodesQuery.data?.find((n) => n.id === nodeId)?.name || nodeId;
             console.log(
-              `MQTT Cache: Cleared for node ${selectedNodeIdForScan} on dialog open.`,
+              `MQTT Cache: Cleared for selected node ${nodeName} (${nodeId}).`,
             );
-            setIsCreateKeyDialogOpen(true);
+            toast.info(
+              `KeyLock device "${nodeName}" selected. Ready for scan.`,
+            );
           },
           onError: (error) => {
+            const nodeName =
+              listNodesQuery.data?.find((n) => n.id === nodeId)?.name || nodeId;
             console.error(
-              `MQTT Cache: Failed to clear for node ${selectedNodeIdForScan} on dialog open:`,
+              `MQTT Cache: Failed to clear for node ${nodeName} (${nodeId}) on selection:`,
               error,
             );
-            setIsCreateKeyDialogOpen(true);
+            toast.error(
+              `Could not fully prepare node "${nodeName}". Previous scan data might persist.`,
+            );
           },
         },
       );
-    } else {
-      setIsCreateKeyDialogOpen(true);
     }
   };
 
@@ -217,28 +234,19 @@ export default function KeyUsersPage() {
       toast.error("Please select a KeyLock device first.");
       return;
     }
+
+    // Invalidate the query to ensure fresh data is fetched from the server
+    utils.keyUsers.getScannedRfidTag.invalidate({
+      nodeId: selectedNodeIdForScan,
+    });
+
+    // Explicitly set to null here to ensure UI updates immediately to "Scanning..."
     setRfidTagIdFromScan(null);
-    clearCacheMutation.mutate(
-      { nodeId: selectedNodeIdForScan },
-      {
-        onSuccess: () => {
-          console.log(
-            `MQTT Cache: Cleared for node ${selectedNodeIdForScan}. Starting scan...`,
-          );
-          setIsListeningForScan(true);
-        },
-        onError: (error) => {
-          console.error(
-            `MQTT Cache: Failed to clear for node ${selectedNodeIdForScan} before scan:`,
-            error,
-          );
-          toast.error(
-            "Could not clear previous scan session. Proceeding with scan, but old data might appear briefly.",
-          );
-          setIsListeningForScan(true);
-        },
-      },
-    );
+
+    // Cache is cleared by handleNodeSelectionChange when a node is selected.
+    // RFID tag display is reset by handleNodeSelectionChange or when dialog opens, and now above.
+    setIsListeningForScan(true);
+    toast.info("Listening for RFID card scan...");
   };
 
   const handleCreateKey = () => {
@@ -448,7 +456,7 @@ export default function KeyUsersPage() {
               </Label>
               <Select
                 value={selectedNodeIdForScan}
-                onValueChange={setSelectedNodeIdForScan}
+                onValueChange={handleNodeSelectionChange} // Changed to use the new handler
               >
                 <SelectTrigger className="col-span-3">
                   <SelectValue placeholder="Select a KeyLock device" />

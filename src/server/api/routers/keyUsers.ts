@@ -1,9 +1,5 @@
 import { z } from "zod";
-import {
-  createTRPCRouter,
-  publicProcedure,
-  protectedProcedure,
-} from "~/server/api/trpc";
+import { createTRPCRouter, publicProcedure } from "~/server/api/trpc";
 import { db } from "~/server/db";
 import { TRPCError } from "@trpc/server";
 import { mqttClient } from "~/server/mqtt/client"; // Import the MQTT client
@@ -27,7 +23,7 @@ export const keyUsersRouter = createTRPCRouter({
     }),
 
   // Procedure to create a new key for a user
-  createKey: protectedProcedure
+  createKey: publicProcedure
     .input(
       z.object({
         keyUserId: z.string(),
@@ -77,7 +73,7 @@ export const keyUsersRouter = createTRPCRouter({
     }),
 
   // Procedure to delete a key
-  deleteKey: protectedProcedure
+  deleteKey: publicProcedure
     .input(z.object({ keyId: z.string() })) // Input is the actual ID of the Key record
     .mutation(async ({ ctx, input }) => {
       // First, check if the key exists
@@ -100,7 +96,7 @@ export const keyUsersRouter = createTRPCRouter({
       return { success: true, message: "Key deleted successfully." };
     }),
 
-  list: protectedProcedure.query(({ ctx }) => {
+  list: publicProcedure.query(({ ctx }) => {
     return db.keyUser.findMany({
       orderBy: { createdAt: "desc" },
       include: {
