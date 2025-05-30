@@ -19,6 +19,7 @@ export const roomRouter = createTRPCRouter({
       orderBy: { createdAt: "desc" },
       include: {
         nodes: true, // Include nodes associated with each room
+        keyUserPermissions: { include: { keyUser: true } }, // Updated to use keyUserPermissions and keyUser
       },
     });
   }),
@@ -30,6 +31,7 @@ export const roomRouter = createTRPCRouter({
         where: { id: input.id },
         include: {
           nodes: true,
+          keyUserPermissions: { include: { keyUser: true } }, // Updated to use keyUserPermissions and keyUser
         },
       });
     }),
@@ -77,6 +79,44 @@ export const roomRouter = createTRPCRouter({
       return db.node.update({
         where: { id: input.nodeId },
         data: { roomId: null }, // Set roomId to null to unassign
+      });
+    }),
+
+  assignUser: publicProcedure
+    .input(z.object({ roomId: z.string(), keyUserId: z.string() })) // Changed userId to keyUserId
+    .mutation(async ({ ctx, input }) => {
+      // Optional: Check if user is authenticated and has permission to assign users
+      // if (!ctx.session?.user) {
+      //   throw new Error("Not authenticated");
+      // }
+
+      return db.keyUserRoomPermission.create({
+        // Changed to keyUserRoomPermission
+        data: {
+          roomId: input.roomId,
+          keyUserId: input.keyUserId, // Changed to keyUserId
+          // assignedBy: ctx.session.user.id, // Optional: track who assigned
+        },
+      });
+    }),
+
+  unassignUser: publicProcedure
+    .input(z.object({ roomId: z.string(), keyUserId: z.string() })) // Changed userId to keyUserId
+    .mutation(async ({ ctx, input }) => {
+      // Optional: Check if user is authenticated and has permission to unassign users
+      // if (!ctx.session?.user) {
+      //   throw new Error("Not authenticated");
+      // }
+
+      return db.keyUserRoomPermission.delete({
+        // Changed to keyUserRoomPermission
+        where: {
+          keyUserId_roomId: {
+            // Changed to keyUserId_roomId
+            keyUserId: input.keyUserId, // Changed to keyUserId
+            roomId: input.roomId,
+          },
+        },
       });
     }),
 });

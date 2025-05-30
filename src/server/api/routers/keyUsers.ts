@@ -100,7 +100,7 @@ export const keyUsersRouter = createTRPCRouter({
     return db.keyUser.findMany({
       orderBy: { createdAt: "desc" },
       include: {
-        key: true, // Include the related Key record
+        key: true, // Corrected: Include the related key (singular)
       },
     });
   }),
