@@ -21,8 +21,9 @@ export default function NodesPage() {
   if (!nodes || nodes.length === 0) return <p>No nodes found.</p>;
 
   const isOnline = (lastSeen: Date) => {
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-    return new Date(lastSeen) > fiveMinutesAgo;
+    // Check if the node was seen in the last minute
+    const oneMinuteAgo = new Date(Date.now() - 1 * 60 * 1000);
+    return new Date(lastSeen) > oneMinuteAgo;
   };
 
   return (

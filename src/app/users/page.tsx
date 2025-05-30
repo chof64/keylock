@@ -97,7 +97,7 @@ export default function KeyUsersPage() {
     error: scannedTagError,
     isFetching,
   } = api.keyUsers.getScannedRfidTag.useQuery(
-    { nodeId: selectedNodeIdForScan || "" }, // Provide a default empty string if undefined
+    { nodeId: selectedNodeIdForScan || "", forCreateMode: true }, // Pass forCreateMode: true
     {
       enabled: !!selectedNodeIdForScan && isListeningForScan, // Only run when a node is selected and we are actively listening
       refetchInterval: 1000, // Poll every 1 second
@@ -138,9 +138,63 @@ export default function KeyUsersPage() {
     },
   });
 
+  const startKeyRegistrationMutation =
+    api.keyUsers.startKeyRegistrationOnNode.useMutation({
+      onSuccess: (data, variables) => {
+        const nodeName =
+          listNodesQuery.data?.find((n) => n.id === variables.nodeId)?.name ||
+          variables.nodeId;
+        toast.success(`KeyLock "${nodeName}" is now in key registration mode.`);
+        // Proceed to listen for scans, which is handled by handleStartScan's state changes
+      },
+      onError: (error, variables) => {
+        const nodeName =
+          listNodesQuery.data?.find((n) => n.id === variables.nodeId)?.name ||
+          variables.nodeId;
+        toast.error(
+          `Failed to start key registration on "${nodeName}": ${error.message}`,
+        );
+        setIsListeningForScan(false); // Stop listening if we can't even start the mode
+      },
+    });
+
+  const notifyDeviceKeyRegistrationResultMutation =
+    api.keyUsers.notifyDeviceKeyRegistrationResult.useMutation({
+      onSuccess: (data, variables) => {
+        const nodeName =
+          listNodesQuery.data?.find((n) => n.id === variables.nodeId)?.name ||
+          variables.nodeId;
+        if (variables.registrationSuccess) {
+          toast.success(
+            `Notified KeyLock "${nodeName}" of successful key registration.`,
+          );
+        } else {
+          toast.warning(
+            `Notified KeyLock "${nodeName}" of failed key registration.`,
+          );
+        }
+      },
+      onError: (error, variables) => {
+        const nodeName =
+          listNodesQuery.data?.find((n) => n.id === variables.nodeId)?.name ||
+          variables.nodeId;
+        toast.error(
+          `Failed to notify KeyLock "${nodeName}" of registration result: ${error.message}`,
+        );
+      },
+    });
+
   const createKeyMutation = api.keyUsers.createKey.useMutation({
-    onSuccess: () => {
+    onSuccess: (data, variables) => {
       listKeyUsersQuery.refetch(); // Refetch users to show the new key
+      // Notify the device of success
+      if (selectedNodeIdForScan && variables.keyId) {
+        notifyDeviceKeyRegistrationResultMutation.mutate({
+          nodeId: selectedNodeIdForScan,
+          cardId: variables.keyId,
+          registrationSuccess: true, // Corrected field name
+        });
+      }
       setRfidTagIdFromScan(null); // Reset scanned tag
       setSelectedKeyUserId(null);
       setIsCreateKeyDialogOpen(false);
@@ -148,9 +202,19 @@ export default function KeyUsersPage() {
       setIsListeningForScan(false); // Reset listening state
       toast.success("RFID Key created and assigned successfully!");
     },
-    onError: (error) => {
+    onError: (error, variables) => {
       toast.error(`Failed to create RFID Key: ${error.message}`);
-      setIsListeningForScan(false); // Stop listening on error
+      // Notify the device of failure
+      if (selectedNodeIdForScan && variables.keyId) {
+        notifyDeviceKeyRegistrationResultMutation.mutate({
+          nodeId: selectedNodeIdForScan,
+          cardId: variables.keyId, // keyId is part of variables here
+          registrationSuccess: false, // Corrected field name
+        });
+      }
+      // Do not stop listening here, allow user to retry or see the error,
+      // but the device notification is important.
+      // setIsListeningForScan(false); // Consider if this should be here or handled by user action
     },
   });
 
@@ -184,7 +248,8 @@ export default function KeyUsersPage() {
   };
 
   const utils = api.useUtils();
-  const clearCacheMutation = api.keyUsers.clearRfidCacheForNode.useMutation();
+  const clearLastScannedCardForNodeMutation =
+    api.keyUsers.clearLastScannedCardForNode.useMutation(); // Corrected: Was clearRfidCacheForNode
 
   const openCreateKeyDialog = (user: KeyUser) => {
     setSelectedKeyUserId(user.id);
@@ -200,7 +265,8 @@ export default function KeyUsersPage() {
     setIsListeningForScan(false); // Stop listening, user needs to press "Start Scan" again
 
     if (nodeId) {
-      clearCacheMutation.mutate(
+      clearLastScannedCardForNodeMutation.mutate(
+        // Updated mutation name
         { nodeId },
         {
           onSuccess: () => {
@@ -235,18 +301,26 @@ export default function KeyUsersPage() {
       return;
     }
 
-    // Invalidate the query to ensure fresh data is fetched from the server
-    utils.keyUsers.getScannedRfidTag.invalidate({
-      nodeId: selectedNodeIdForScan,
-    });
+    // Start key registration mode on the selected node
+    startKeyRegistrationMutation.mutate(
+      { nodeId: selectedNodeIdForScan },
+      {
+        onSuccess: () => {
+          // Invalidate the query to ensure fresh data is fetched from the server
+          utils.keyUsers.getScannedRfidTag.invalidate({
+            nodeId: selectedNodeIdForScan,
+            forCreateMode: true, // ensure this matches query key
+          });
 
-    // Explicitly set to null here to ensure UI updates immediately to "Scanning..."
-    setRfidTagIdFromScan(null);
+          // Explicitly set to null here to ensure UI updates immediately to "Scanning..."
+          setRfidTagIdFromScan(null);
 
-    // Cache is cleared by handleNodeSelectionChange when a node is selected.
-    // RFID tag display is reset by handleNodeSelectionChange or when dialog opens, and now above.
-    setIsListeningForScan(true);
-    toast.info("Listening for RFID card scan...");
+          setIsListeningForScan(true);
+          toast.info("Listening for RFID card scan...");
+        },
+        // onError is handled by the mutation's own onError handler
+      },
+    );
   };
 
   const handleCreateKey = () => {
