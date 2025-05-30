@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react"; // Added useEffect
 import { api } from "~/trpc/react";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -31,6 +31,13 @@ import {
 } from "~/components/ui/dialog";
 import { Label } from "~/components/ui/label";
 import { toast } from "sonner";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select"; // Added Select components
 
 // Type for the Key model
 type Key = {
@@ -55,19 +62,65 @@ type KeyUser = {
   key: Key | null; // Can be null if no key is assigned
 };
 
+// Type for Node (adjust based on your actual Node model structure if different)
+type Node = {
+  id: string;
+  name: string | null;
+  lastSeen: Date;
+  // Add other fields if necessary, e.g., roomId
+};
+
 export default function KeyUsersPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false); // Renamed from isCreateUserDialogOpen for clarity
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
 
   // State for the "Create Key" dialog
   const [isCreateKeyDialogOpen, setIsCreateKeyDialogOpen] = useState(false);
   const [selectedKeyUserId, setSelectedKeyUserId] = useState<string | null>(
     null,
   );
-  const [rfidTagId, setRfidTagId] = useState("");
+  const [rfidTagIdFromScan, setRfidTagIdFromScan] = useState<string | null>(
+    null,
+  ); // State to hold the scanned RFID Tag ID
+  const [selectedNodeIdForScan, setSelectedNodeIdForScan] = useState<
+    string | undefined
+  >(undefined);
+  const [isListeningForScan, setIsListeningForScan] = useState(false); // To show loading/listening state
 
   const listKeyUsersQuery = api.keyUsers.list.useQuery();
+  const listNodesQuery = api.nodes.getAll.useQuery(); // Fetch nodes
+
+  // tRPC query to get the scanned RFID tag
+  const { data: scannedTagData, error: scannedTagError } =
+    api.keyUsers.getScannedRfidTag.useQuery(
+      { nodeId: selectedNodeIdForScan || "" }, // Provide a default empty string if undefined
+      {
+        enabled: !!selectedNodeIdForScan && isListeningForScan, // Only run when a node is selected and we are actively listening
+        refetchInterval: 1000, // Poll every 1 second
+        // onSuccess and onError removed from here
+      },
+    );
+
+  // useEffect to handle successful data fetching for getScannedTagQuery
+  useEffect(() => {
+    if (scannedTagData?.rfidTagId) {
+      setRfidTagIdFromScan(scannedTagData.rfidTagId);
+      setIsListeningForScan(false); // Stop polling once tag is received
+      toast.success(`RFID Tag Scanned: ${scannedTagData.rfidTagId}`);
+    }
+  }, [scannedTagData]); // Dependency: run when scannedTagData changes
+
+  // useEffect to handle errors from getScannedTagQuery
+  useEffect(() => {
+    if (scannedTagError) {
+      if (isListeningForScan) {
+        // console.warn(`Polling for RFID tag: ${scannedTagError.message}`);
+      } else {
+        toast.error(`Error fetching RFID tag: ${scannedTagError.message}`);
+      }
+    }
+  }, [scannedTagError, isListeningForScan]); // Dependencies: run when scannedTagError or isListeningForScan changes
 
   const createKeyUserMutation = api.keyUsers.create.useMutation({
     onSuccess: () => {
@@ -85,13 +138,16 @@ export default function KeyUsersPage() {
   const createKeyMutation = api.keyUsers.createKey.useMutation({
     onSuccess: () => {
       listKeyUsersQuery.refetch(); // Refetch users to show the new key
-      setRfidTagId("");
+      setRfidTagIdFromScan(null); // Reset scanned tag
       setSelectedKeyUserId(null);
       setIsCreateKeyDialogOpen(false);
+      setSelectedNodeIdForScan(undefined); // Reset selected node
+      setIsListeningForScan(false); // Reset listening state
       toast.success("RFID Key created and assigned successfully!");
     },
     onError: (error) => {
       toast.error(`Failed to create RFID Key: ${error.message}`);
+      setIsListeningForScan(false); // Stop listening on error
     },
   });
 
@@ -104,28 +160,107 @@ export default function KeyUsersPage() {
     }
   };
 
-  const openCreateKeyDialog = (keyUserId: string) => {
-    setSelectedKeyUserId(keyUserId);
-    setIsCreateKeyDialogOpen(true);
+  const utils = api.useUtils();
+  const clearCacheMutation = api.keyUsers.clearRfidCacheForNode.useMutation();
+
+  const openCreateKeyDialog = (user: KeyUser) => {
+    setSelectedKeyUserId(user.id);
+    setRfidTagIdFromScan(null);
+    setIsListeningForScan(false);
+
+    if (selectedNodeIdForScan) {
+      clearCacheMutation.mutate(
+        { nodeId: selectedNodeIdForScan },
+        {
+          onSuccess: () => {
+            console.log(
+              `MQTT Cache: Cleared for node ${selectedNodeIdForScan} on dialog open.`,
+            );
+            setIsCreateKeyDialogOpen(true);
+          },
+          onError: (error) => {
+            console.error(
+              `MQTT Cache: Failed to clear for node ${selectedNodeIdForScan} on dialog open:`,
+              error,
+            );
+            setIsCreateKeyDialogOpen(true);
+          },
+        },
+      );
+    } else {
+      setIsCreateKeyDialogOpen(true);
+    }
+  };
+
+  const handleStartScan = () => {
+    if (!selectedNodeIdForScan) {
+      toast.error("Please select a KeyLock device first.");
+      return;
+    }
+    setRfidTagIdFromScan(null);
+    clearCacheMutation.mutate(
+      { nodeId: selectedNodeIdForScan },
+      {
+        onSuccess: () => {
+          console.log(
+            `MQTT Cache: Cleared for node ${selectedNodeIdForScan}. Starting scan...`,
+          );
+          setIsListeningForScan(true);
+        },
+        onError: (error) => {
+          console.error(
+            `MQTT Cache: Failed to clear for node ${selectedNodeIdForScan} before scan:`,
+            error,
+          );
+          toast.error(
+            "Could not clear previous scan session. Proceeding with scan, but old data might appear briefly.",
+          );
+          setIsListeningForScan(true);
+        },
+      },
+    );
   };
 
   const handleCreateKey = () => {
-    if (selectedKeyUserId && rfidTagId.trim()) {
-      createKeyMutation.mutate({
-        keyUserId: selectedKeyUserId,
-        keyId: rfidTagId.trim(),
-        // name: "Optional Key Name" // You can add a field for this in the dialog if needed
-      });
+    if (!selectedKeyUserId || !rfidTagIdFromScan /* || !selectedNodeIdForScan */) { // selectedNodeIdForScan might not be strictly needed for key creation itself if not used by backend
+      toast.error(
+        "Missing user or RFID tag. Please ensure all are selected/scanned.",
+      );
+      return;
     }
+    createKeyMutation.mutate({
+      keyUserId: selectedKeyUserId,
+      keyId: rfidTagIdFromScan,
+      // name: "Default Key Name", // Optional: Or derive from user/node
+      // nodeId: selectedNodeIdForScan, // Removed as it's not in the mutation's input type
+    });
   };
+
+  // Effect to stop polling if dialog is closed or node selection changes
+  useEffect(() => {
+    if (!isCreateKeyDialogOpen || !selectedNodeIdForScan) {
+      setIsListeningForScan(false);
+    }
+  }, [isCreateKeyDialogOpen, selectedNodeIdForScan]);
 
   if (listKeyUsersQuery.isLoading) return <p>Loading users...</p>;
   if (listKeyUsersQuery.error)
     return <p>Error loading users: {listKeyUsersQuery.error.message}</p>;
 
+  // Potentially handle node loading/error states as well
+  // if (listNodesQuery.isLoading) return <p>Loading nodes...</p>;
+  // if (listNodesQuery.error) return <p>Error loading nodes: {listNodesQuery.error.message}</p>;
+
+  const selectedUserForDialog = listKeyUsersQuery.data?.find(
+    (u) => u.id === selectedKeyUserId,
+  );
+  const selectedNodeForDialog = listNodesQuery.data?.find(
+    (n) => n.id === selectedNodeIdForScan,
+  );
+
   return (
     <div className="container mx-auto p-4">
-      <div className="flex justify-between items-center mb-6">
+      <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-bold">User Management (KeyLock Users)</h1>
         <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
           <DialogTrigger asChild>
@@ -230,7 +365,7 @@ export default function KeyUsersPage() {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => openCreateKeyDialog(user.id)}
+                            onClick={() => openCreateKeyDialog(user)} // Pass the whole user object
                           >
                             Create RFID Key
                           </Button>
@@ -262,49 +397,109 @@ export default function KeyUsersPage() {
             <DialogTitle>Create New RFID Key</DialogTitle>
             <DialogDescription>
               Assign a new RFID Key to user:{" "}
-              {
-                listKeyUsersQuery.data?.find((u) => u.id === selectedKeyUserId)
-                  ?.name
-              }
+              <strong>{selectedUserForDialog?.name || "Unknown User"}</strong>.
+              <br />
+              1. Select the KeyLock device below.
+              <br />
+              2. Click "Start Scan" and then scan the new RFID card on the
+              selected device.
+              <br />
+              The RFID Tag ID will be captured and displayed. Click "Create Key"
+              once the scan is confirmed.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="rfidTagId" className="text-right">
-                RFID Tag ID
+              <Label htmlFor="keylockNode" className="text-right">
+                KeyLock Device
+              </Label>
+              <Select
+                value={selectedNodeIdForScan}
+                onValueChange={setSelectedNodeIdForScan}
+              >
+                <SelectTrigger className="col-span-3">
+                  <SelectValue placeholder="Select a KeyLock device" />
+                </SelectTrigger>
+                <SelectContent>
+                  {listNodesQuery.data?.map((node: Node) => (
+                    <SelectItem key={node.id} value={node.id}>
+                      {node.name || node.id} (Last seen:{" "}
+                      {new Date(node.lastSeen).toLocaleTimeString()})
+                    </SelectItem>
+                  ))}
+                  {(!listNodesQuery.data ||
+                    listNodesQuery.data.length === 0) && (
+                    <SelectItem value="no-nodes" disabled>
+                      No KeyLock devices found
+                    </SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Display area for scanned RFID tag */}
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="scannedRfidTag" className="text-right">
+                Scanned Tag ID
               </Label>
               <Input
-                id="rfidTagId"
-                value={rfidTagId}
-                onChange={(e) => setRfidTagId(e.target.value)}
-                className="col-span-3"
-                placeholder="Scan or enter RFID Tag ID"
+                id="scannedRfidTag"
+                value={
+                  rfidTagIdFromScan ||
+                  (isListeningForScan ? "Scanning..." : "N/A")
+                }
+                className="col-span-3 font-mono text-sm"
+                readOnly
+                disabled
               />
             </div>
           </div>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setSelectedKeyUserId(null);
-                  setRfidTagId(""); // Clear input on cancel
-                }}
-              >
-                Cancel
-              </Button>
-            </DialogClose>
+          <DialogFooter className="sm:justify-between">
             <Button
-              type="submit"
-              onClick={handleCreateKey}
+              onClick={handleStartScan}
               disabled={
-                createKeyMutation.isPending ||
-                !rfidTagId.trim() ||
-                !selectedKeyUserId
+                !selectedNodeIdForScan ||
+                isListeningForScan ||
+                !!rfidTagIdFromScan // Disable if already scanned
               }
+              variant="secondary"
             >
-              {createKeyMutation.isPending ? "Creating..." : "Create Key"}
+              {isListeningForScan
+                ? "Listening..."
+                : rfidTagIdFromScan
+                  ? "Scan Complete"
+                  : "Start Scan"}
             </Button>
+            <div className="flex space-x-2">
+              <DialogClose asChild>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    // Reset states when cancelling/closing the dialog
+                    setSelectedKeyUserId(null);
+                    setRfidTagIdFromScan(null);
+                    setSelectedNodeIdForScan(undefined);
+                    setIsListeningForScan(false);
+                    // setIsCreateKeyDialogOpen(false); // Dialog closes automatically by DialogClose
+                  }}
+                >
+                  Cancel
+                </Button>
+              </DialogClose>
+              <Button
+                type="submit"
+                onClick={handleCreateKey} // Corrected: Call handleCreateKey
+                disabled={
+                  createKeyMutation.isPending ||
+                  !selectedKeyUserId ||
+                  !selectedNodeIdForScan ||
+                  !rfidTagIdFromScan ||
+                  isListeningForScan
+                }
+              >
+                {createKeyMutation.isPending ? "Creating..." : "Create Key"}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
