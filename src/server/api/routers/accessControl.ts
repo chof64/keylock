@@ -143,7 +143,7 @@ export const accessControlRouter = createTRPCRouter({
       const mqttClientInstance = getMqttClient();
       if (mqttClientInstance?.connected) {
         const accessTopic = `devices/keylock/access/${nodeId}`;
-        const message = accessGranted ? "GRANT" : "DENY";
+        const message = accessGranted ? "ALLOW" : "DENY"; // Changed from GRANT/DENY to ALLOW/DENY
         mqttClientInstance.publish(accessTopic, message, { qos: 1 }, (err) => {
           if (err) {
             console.error(`[MQTT] Failed to publish to ${accessTopic}: ${err}`);

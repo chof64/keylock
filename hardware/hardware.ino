@@ -505,44 +505,48 @@ void publishHealthCheck()
  */
 void mqttCallback(char *topic, byte *payload, unsigned int length)
 {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  String message;
+  String topicStr = String(topic);
+  String payloadStr = "";
   for (unsigned int i = 0; i < length; i++)
   {
-    message += (char)payload[i];
+    payloadStr += (char)payload[i];
   }
-  Serial.println(message);
 
-  String topicStr = String(topic);
+  Serial.print("MQTT Message arrived [");
+  Serial.print(topicStr);
+  Serial.print("] ");
+  Serial.println(payloadStr);
 
+  // Check if the message is on the device-specific access topic
   if (topicStr.equals(access_topic))
   {
-    if (message.equalsIgnoreCase("ALLOW"))
+    if (payloadStr.equals("ALLOW")) // Changed from GRANT to ALLOW
     {
-      Serial.println("Access GRANTED by server.");
-      displayOLED("Access GRANTED", "Welcome!", "", hostname, true, true); // Inverted colors for grant
-      beepBuzzer(100, 3); // Three short beeps for granted
-      delay(2000);
-      displayLogo();
+      Serial.println("Access ALLOWED by server.");
+      displayOLED("Access Control", "Access ALLOWED", "", hostname, true, false);
+      beepBuzzer(100, 2); // Two short beeps for allowed
+      // TODO: Add logic to unlock the door
+      delay(3000); // Display message for a few seconds
+      displayLogo(); // Return to default screen
     }
-    else if (message.equalsIgnoreCase("DENY"))
+    else if (payloadStr.equals("DENY"))
     {
       Serial.println("Access DENIED by server.");
-      displayOLED("Access DENIED", "Unauthorized", "", hostname, true);
+      displayOLED("Access Control", "Access DENIED", "", hostname, true, true); // Invert colors for DENIED
       beepBuzzer(500, 1); // One long beep for denied
-      delay(2000);
-      displayLogo();
+      delay(3000); // Display message for a few seconds
+      displayLogo(); // Return to default screen
     }
     else
     {
-      Serial.println("Unknown access command: " + message);
-      displayOLED("Access Unknown", message, "", hostname);
-      delay(1500);
+      Serial.print("Unknown access control message: ");
+      Serial.println(payloadStr);
+      displayOLED("Access Control", "Unknown Reply:", payloadStr, hostname, true, true);
+      delay(2000);
       displayLogo();
     }
   }
+  // Check if the message is on the device-specific admin topic
   else if (topicStr.equals(admin_topic))
   {
     Serial.println("Admin command received: " + message);
