@@ -1,10 +1,11 @@
 import mqtt from "mqtt";
-import { db } from "~/server/db";
-import { env } from "~/env.js";
+import { env } from "~/env";
+import { db } from "~/server/db"; // Import db for logging
+import { createCaller } from "~/server/api/root"; // To call the new tRPC procedure
 
 const MQTT_BROKER_URL = env.MQTT_BROKER_URL;
 const HEALTH_TOPIC = "devices/keylock/health";
-const SCANNED_RFID_TOPIC = "devices/keylock/scanned"; // New topic for scanned RFID tags
+const SCANNED_RFID_TOPIC_PREFIX = "devices/keylock/scanned/"; // Prefix for scanned RFID topics
 
 // In-memory store for the last scanned RFID tag per node
 // Stores { rfidTagId: string, timestamp: number }
@@ -27,81 +28,93 @@ export function connectMqtt() {
         if (err) {
           console.error("Failed to subscribe to health topic:", err);
         } else {
-          console.log(`Subscribed to topic: ${HEALTH_TOPIC}`);
+          console.log("Subscribed to health topic:", HEALTH_TOPIC);
         }
       });
-      // Subscribe to Scanned RFID Topic
-      client?.subscribe(SCANNED_RFID_TOPIC, (err) => {
+      // Subscribe to device-specific Scanned RFID Topics
+      const deviceSpecificScannedTopic = `${SCANNED_RFID_TOPIC_PREFIX}+`; // '+' is a single-level wildcard
+      client?.subscribe(deviceSpecificScannedTopic, (err) => {
         if (err) {
-          console.error("Failed to subscribe to scanned RFID topic:", err);
+          console.error(
+            "Failed to subscribe to scanned RFID topic pattern:",
+            err,
+          );
         } else {
-          console.log(`Subscribed to topic: ${SCANNED_RFID_TOPIC}`);
+          console.log(
+            "Subscribed to scanned RFID topic pattern:",
+            deviceSpecificScannedTopic,
+          );
         }
       });
     });
 
     client.on("message", async (topic, message) => {
+      const messageString = message.toString();
+      console.log(`[MQTT] Received on '${topic}': '${messageString}'`);
+
       if (topic === HEALTH_TOPIC) {
-        const rawMessage = message.toString();
-        console.log(`Raw message received on topic ${topic}: ${rawMessage}`);
         try {
-          const healthData = JSON.parse(rawMessage);
-          const { nodeId, name, ...rest } = healthData;
+          const healthData = JSON.parse(messageString);
+          const { hostname, ip, status } = healthData;
 
-          if (!nodeId) {
-            console.warn(
-              "Received healthcheck without nodeId. Full data:",
-              healthData,
-            );
-            return;
+          if (hostname && status === "online") {
+            await db.node.upsert({
+              where: { id: hostname }, // Assuming hostname is the unique ID for the node
+              update: {
+                name: hostname,
+                lastSeen: new Date(),
+                ipAddress: ip,
+                status: status,
+              }, // Added ipAddress and status
+              create: {
+                id: hostname,
+                name: hostname,
+                lastSeen: new Date(),
+                ipAddress: ip,
+                status: status,
+              }, // Added ipAddress and status
+            });
+            console.log(`[MQTT Health] Node '${hostname}' updated/created.`);
+          } else {
+            console.warn("[MQTT Health] Invalid health data:", healthData);
           }
-
-          console.log(
-            `Parsed healthcheck from nodeId '${nodeId}'. Full data:`,
-            healthData,
-          );
-
-          const result = await db.node.upsert({
-            where: { id: nodeId },
-            update: {
-              name: name || undefined,
-              lastSeen: new Date(),
-            },
-            create: {
-              id: nodeId,
-              name: name || undefined,
-              lastSeen: new Date(),
-            },
-          });
-          console.log(
-            `Node '${nodeId}' upserted successfully. DB Result:`,
-            result,
-          );
         } catch (error) {
           console.error(
-            `Error processing healthcheck message. Raw message: '${rawMessage}'. Error:`,
+            "[MQTT Health] Error processing health message:",
             error,
           );
         }
-      } else if (topic === SCANNED_RFID_TOPIC) {
-        const rawMessage = message.toString();
-        console.log(`Raw message received on topic ${topic}: ${rawMessage}`);
+      } else if (topic.startsWith(SCANNED_RFID_TOPIC_PREFIX)) {
+        const nodeId = topic.substring(SCANNED_RFID_TOPIC_PREFIX.length);
+        const rfidTagId = messageString;
+        console.log(
+          `[MQTT Scan] RFID '${rfidTagId}' scanned at Node '${nodeId}'`,
+        );
+
+        // Store the scanned tag temporarily (optional, if needed for other purposes)
+        lastScannedTags.set(nodeId, {
+          rfidTagId,
+          timestamp: Date.now(),
+        });
+
+        // Call the tRPC mutation to check access and notify the device
         try {
-          const scannedData = JSON.parse(rawMessage) as {
-            nodeId: string;
-            rfidTagId: string;
-          };
-          // Store the scanned tag with a timestamp
-          lastScannedTags.set(scannedData.nodeId, {
-            rfidTagId: scannedData.rfidTagId,
-            timestamp: Date.now(),
-          });
+          const trpcCaller = createCaller({
+            db,
+            session: null,
+            headers: new Headers(),
+          }); // Create a caller instance
+          const result =
+            await trpcCaller.accessControl.checkAccessAndNotifyDevice({
+              rfidTagId,
+              nodeId,
+            });
           console.log(
-            `Stored scanned RFID from Node \'${scannedData.nodeId}\': ${scannedData.rfidTagId}`,
+            `[AccessCheck] Result for RFID '${rfidTagId}' at Node '${nodeId}': Granted: ${result.granted}, Status: ${result.status}`,
           );
         } catch (error) {
           console.error(
-            `Error processing scanned RFID message. Raw message: \'${rawMessage}\'. Error:`,
+            `[AccessCheck] Error calling checkAccessAndNotifyDevice for RFID '${rfidTagId}' at Node '${nodeId}':`,
             error,
           );
         }

@@ -3,6 +3,7 @@ import { nodeRouter } from "~/server/api/routers/nodes"; // Importing nodeRouter
 import { roomRouter } from "~/server/api/routers/rooms"; // Importing roomRouter
 import { keyUsersRouter } from "~/server/api/routers/keyUsers"; // Importing keyUsersRouter
 import { userRouter } from "~/server/api/routers/users"; // Importing userRouter
+import { accessControlRouter } from "~/server/api/routers/accessControl"; // Import the new access control router
 import { createCallerFactory, createTRPCRouter } from "~/server/api/trpc";
 import "~/server/mqtt/client"; // Import MQTT client to initialize it
 
@@ -17,6 +18,7 @@ export const appRouter = createTRPCRouter({
   rooms: roomRouter, // Adding roomRouter to the appRouter
   keyUsers: keyUsersRouter, // Adding keyUsersRouter to the appRouter
   users: userRouter, // Adding userRouter to the appRouter
+  accessControl: accessControlRouter, // Add the access control router
 });
 
 // export type definition of API

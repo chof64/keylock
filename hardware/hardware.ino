@@ -55,7 +55,10 @@ const int numWifiNetworks = sizeof(wifiNetworks) / sizeof(wifiNetworks[0]);
 IPAddress mqtt_server_ip(192, 168, 1, 200);          // Static IP address of the MQTT server
 const int mqtt_port = 1883;                          // MQTT server port
 const char *health_topic = "devices/keylock/health"; // MQTT topic for health checks
-const char *scanned_rfid_topic = "devices/keylock/scanned"; // MQTT topic for scanned RFID tags
+// const char *scanned_rfid_topic = "devices/keylock/scanned"; // MQTT topic for scanned RFID tags - Will be dynamic
+char scanned_rfid_topic[100]; // Buffer for device-specific scanned RFID topic
+// const char *access_topic = "devices/keylock/access"; // MQTT topic for access control - Will be dynamic
+char access_topic[100];       // Buffer for device-specific access control topic
 IPAddress mqttServerIp;                              // Stores the resolved IP of the MQTT server
 
 // Global Variables
@@ -89,13 +92,28 @@ const int MAX_MQTT_RETRIES_PER_WIFI = 3;
 bool attemptSingleWifiConnection(int networkIndex); // Changed from setupWifi
 String getMacAddressString(bool withColons = false);
 void initOLED();
-void displayOLED(String line1, String line2 = "", String line3 = "", String line4 = "", bool clear = true);
+void displayOLED(String line1, String line2 = "", String line3 = "", String line4 = "", bool clear = true, bool invertColors = false); // Added invertColors
 void displayLogo();
 void initRFID(); // Declaration remains the same
 void scanRFIDAndBeep(); // Declaration remains the same
 void beepBuzzer(int duration_ms = 150, int times = 1);
 bool connectMQTT(); // Changed to return bool
 void publishHealthCheck();
+void mqttCallback(char *topic, byte *payload, unsigned int length); // MQTT message callback
+
+// Function to set hostname and MQTT topics based on MAC address
+void setDeviceSpecificIdentifiers() {
+  String macAddr = getMacAddressString(false); // Get MAC without colons
+  macAddr.toLowerCase();
+  hostname = "keylock-" + macAddr;
+  Serial.print("Hostname set/updated: ");
+  Serial.println(hostname);
+
+  snprintf(scanned_rfid_topic, sizeof(scanned_rfid_topic), "devices/keylock/scanned/%s", hostname.c_str());
+  snprintf(access_topic, sizeof(access_topic), "devices/keylock/access/%s", hostname.c_str());
+  Serial.print("Scanned RFID Topic: "); Serial.println(scanned_rfid_topic);
+  Serial.print("Access Control Topic: "); Serial.println(access_topic);
+}
 
 // =========================================================================
 // SETUP FUNCTION - Runs once at startup
@@ -117,24 +135,17 @@ void setup()
   displayOLED("KeyLock System", "Booting...");
   delay(1000);
 
+  // Hostname and topics will be set after WiFi connection.
+
   bool initialWifiConnected = false;
   for (int i = 0; i < numWifiNetworks; ++i)
   {
     currentWifiNetworkIndex = i;
-    WiFi.disconnect(true); // Ensure clean state before attempting
-    delay(100);            // Short delay for WiFi module
+    WiFi.disconnect(true);    delay(100);
     if (attemptSingleWifiConnection(currentWifiNetworkIndex))
     {
+      setDeviceSpecificIdentifiers(); // Set hostname and topics now that WiFi is connected
       initialWifiConnected = true;
-      Serial.println("WiFi Connected during setup!");
-      // IP Address and SSID are displayed by attemptSingleWifiConnection
-
-      // Generate Hostname from MAC Address
-      String macAddr = getMacAddressString(false); // Get MAC without colons
-      macAddr.toLowerCase();
-      hostname = "keylock-" + macAddr;
-      Serial.print("Hostname: ");
-      Serial.println(hostname);
 
       // Initialize RFID Reader
       initRFID();
@@ -143,20 +154,17 @@ void setup()
       displayOLED("MQTT Connecting", mqtt_server_ip.toString(), "Setup Attempt...");
       if (connectMQTT())
       {
-        mqttConnectRetryCount = 0; // Reset for this Wi-Fi
-        // connectMQTT displays "MQTT Connected"
+        Serial.println("MQTT connected during setup.");
+        displayOLED("MQTT Connected", hostname, "Setup OK");
         delay(1000);
       }
       else
       {
-        // MQTT failed in setup, loop will retry
-        mqttConnectRetryCount = 1;        // Count this as the first failed attempt
-        lastMqttAttemptMillis = millis(); // Set for loop's retry interval
-        // connectMQTT displays "MQTT Failed: reason"
-        displayOLED("MQTT Setup Fail", "Will retry in loop");
+        Serial.println("MQTT connection failed during setup.");
+        displayOLED("MQTT Failed", hostname, "Setup Error");
         delay(1000);
       }
-      break; // Exit the loop once WiFi is connected
+      break;
     }
     // If attemptSingleWifiConnection failed, it shows a message and the loop continues to the next network.
   }
@@ -165,6 +173,7 @@ void setup()
   {
     Serial.println("Failed to connect to any WiFi network during setup.");
     displayOLED("Setup Failed", "No WiFi Available", "Retrying in loop...");
+    // Hostname and topics are not set yet. They will be set in loop when WiFi connects.
     currentWifiNetworkIndex = 0; // Reset to start from the first network in the loop
     delay(2000);
   }
@@ -179,29 +188,34 @@ void loop()
 {
   if (WiFi.status() == WL_CONNECTED)
   {
+    // Ensure hostname and topics are set if they weren't during setup or if they seem invalid
+    if (hostname == "" || hostname.startsWith("keylock-000000000000") || strlen(scanned_rfid_topic) == 0 || strlen(access_topic) == 0) {
+        Serial.println("Hostname/topics not set or invalid in loop, (re)initializing.");
+        setDeviceSpecificIdentifiers();
+    }
+
     if (!mqttClient.connected())
     {
       Serial.println("MQTT not connected. Attempting to connect...");
       displayOLED("MQTT Connecting", mqtt_server_ip.toString());
-      if (connectMQTT())
+      if (connectMQTT()) // connectMQTT will use the globally set hostname and subscribe to access_topic
       {
-        // MQTT connected, proceed with normal operations
-        lastHealthCheck = millis(); // Reset health check timer on new connection
-        publishHealthCheck();       // Publish initial health check
+        Serial.println("MQTT connected in loop.");
+        displayOLED("MQTT Connected", hostname, "In Loop OK");
+        delay(1000);
+        displayLogo(); // Show logo after successful MQTT connection
       }
       else
       {
-        // MQTT connection failed, will retry on next loop iteration
-        // displayOLED handled by connectMQTT()
-        delay(5000); // Wait before retrying MQTT
-        displayLogo();
+        Serial.println("MQTT connection failed in loop.");
+        // displayOLED handled by connectMQTT on failure
+        // No need to display logo here as connectMQTT shows error then returns to main loop flow
       }
     }
     else
     {
       // Both WiFi and MQTT are connected
-      mqttClient.loop(); // Keep MQTT client alive
-
+      mqttClient.loop();
       // Publish health check periodically
       if (millis() - lastHealthCheck > healthCheckInterval)
       {
@@ -224,7 +238,7 @@ void loop()
       // WiFi connected, hostname should be set. Attempt MQTT connection in the next loop.
       // Display is handled by attemptSingleWifiConnection
       // Set hostname based on MAC for MQTT client ID
-      hostname = "ESP32-" + getMacAddressString(false); // false for no colons
+      hostname = "keylock-" + getMacAddressString(false); // Ensure consistent "keylock-" prefix
       Serial.println("Hostname for MQTT: " + hostname);
     }
     else
@@ -345,15 +359,25 @@ void initOLED()
  * @param line3 Text for the third line (optional).
  * @param line4 Text for the fourth line (optional).
  * @param clear Clear display before writing.
+ * @param invertColors True to display black text on white background, false for white text on black.
  */
-void displayOLED(String line1, String line2, String line3, String line4, bool clear)
+void displayOLED(String line1, String line2, String line3, String line4, bool clear, bool invertColors)
 {
   if (clear)
   {
     display.clearDisplay();
   }
-  display.setTextSize(1); // Use small text size for messages
-  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+  if (invertColors) {
+    display.setTextColor(SSD1306_BLACK, SSD1306_WHITE); // Black text on white background
+    // Fill the screen with white if clearing or if it's the first line,
+    // to ensure the background is white.
+    if (clear || (line1 != "" && line2 == "" && line3 == "" && line4 == "")) {
+        display.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, SSD1306_WHITE);
+    }
+  } else {
+    display.setTextColor(SSD1306_WHITE); // White text on black background
+  }
   display.setCursor(0, 0);
 
   if (line1 != "")
@@ -545,26 +569,19 @@ void scanRFIDAndBeep()
   // Publish RFID UID to MQTT
   if (mqttClient.connected())
   {
-    char payloadBuffer[128];
-    String currentHostname = hostname;
-    if (currentHostname == "") {
-      currentHostname = "keylock-" + getMacAddressString(false); // Fallback hostname
-    }
-
-    sprintf(payloadBuffer, "{\"nodeId\":\"%s\",\"rfidTagId\":\"%s\"}",
-            currentHostname.c_str(),
-            uidString.c_str());
-
-    if (mqttClient.publish(scanned_rfid_topic, payloadBuffer))
+    if (mqttClient.publish(scanned_rfid_topic, uidString.c_str()))
     {
-      Serial.println("Scanned RFID UID published: " + String(payloadBuffer));
+      Serial.println("RFID UID published to MQTT topic: " + String(scanned_rfid_topic));
+      displayOLED("Card Scanned", "UID:", uidString, "Sent to Server", true);
     }
     else
     {
-      Serial.println("Failed to publish scanned RFID UID.");
+      Serial.println("Failed to publish RFID UID to MQTT.");
+      displayOLED("Card Scanned", "UID:", uidString, "MQTT Post Fail", true);
     }
   } else {
-    Serial.println("MQTT not connected. Cannot publish scanned RFID UID.");
+    Serial.println("MQTT not connected. Cannot publish RFID UID.");
+    displayOLED("Card Scanned", "UID:", uidString, "MQTT Offline", true);
   }
 
   delay(2000);   // Display UID on OLED for 2 seconds
@@ -599,22 +616,48 @@ bool connectMQTT()
 {
   // Caller should handle display for retries. This function displays final success/failure.
 
-  mqttServerIp = mqtt_server_ip; // Using the predefined IP
+  // Ensure hostname and topics are valid before attempting to connect
+  if (hostname == "" || hostname.startsWith("keylock-000000000000") || strlen(access_topic) == 0) {
+    Serial.println("CRITICAL: MQTT connect: Hostname or access_topic not properly initialized.");
+    Serial.print("Current Hostname: "); Serial.println(hostname);
+    Serial.print("Current Access Topic: "); Serial.println(access_topic);
+    displayOLED("MQTT Error", "Bad Hostname/Topic", hostname, "", true);
+    delay(2000);
+    return false; // Cannot connect without a proper hostname and access_topic
+  }
+
+  mqttServerIp = mqtt_server_ip;
   mqttClient.setServer(mqttServerIp, mqtt_port);
+  mqttClient.setCallback(mqttCallback); // Set the MQTT message callback
 
   // Attempt to connect with a unique client ID (hostname)
   if (hostname == "")
-  { // Safety check if hostname wasn\'t set (e.g. WiFi never connected in setup)
-    Serial.println("Hostname not set, cannot connect to MQTT yet.");
-    displayOLED("MQTT Error", "Hostname Missing", "Check WiFi");
-    delay(1500);
-    return false;
+  {
+    hostname = "keylock-" + getMacAddressString(false); // Ensure hostname is set
   }
+
+  Serial.print("Attempting MQTT connection to ");
+  Serial.print(mqttServerIp);
+  Serial.print(":");
+  Serial.print(mqtt_port);
+  Serial.print(" as ");
+  Serial.println(hostname);
+  displayOLED("MQTT Connecting", hostname, mqttServerIp.toString());
 
   if (mqttClient.connect(hostname.c_str()))
   {
-    Serial.println("MQTT connected!");
-    displayOLED("MQTT Connected", mqtt_server_ip.toString());
+    Serial.println("MQTT connected successfully!");
+    displayOLED("MQTT Connected", hostname, mqttServerIp.toString());
+    // Subscribe to the device-specific access topic
+    if (mqttClient.subscribe(access_topic)) {
+      Serial.print("Subscribed to access topic: ");
+      Serial.println(access_topic);
+      displayOLED("MQTT Connected", "Access Topic OK", access_topic, "", false);
+    } else {
+      Serial.print("Failed to subscribe to access topic: ");
+      Serial.println(access_topic);
+      displayOLED("MQTT Connected", "Access Sub Fail", access_topic, "", false);
+    }
     delay(1000);
     return true;
   }
@@ -670,31 +713,83 @@ void publishHealthCheck()
 {
   if (mqttClient.connected())
   {
-    char payloadBuffer[256]; // Increased buffer size for longer payload
-    String ipStr = WiFi.localIP().toString();
-    long rssiVal = WiFi.RSSI();
-    unsigned long uptimeVal = millis() / 1000;
-    String nodeIdStr = hostname; // Use the global hostname as nodeId
-    String nameStr = hostname;   // Use the global hostname as name, or a custom name
-
-    // Format the JSON string into the buffer, including nodeId and name
-    sprintf(payloadBuffer, "{\"nodeId\":\"%s\",\"name\":\"%s\",\"status\":\"online\",\"ip\":\"%s\",\"rssi\":%ld,\"uptime\":%lu}",
-            nodeIdStr.c_str(),
-            nameStr.c_str(),
-            ipStr.c_str(),
-            rssiVal,
-            uptimeVal);
-
-    if (mqttClient.publish(health_topic, payloadBuffer))
+    String healthPayload = "{\"status\":\"online\", \"ip\":\"" + WiFi.localIP().toString() + "\", \"hostname\":\"" + hostname + "\"}";
+    if (mqttClient.publish(health_topic, healthPayload.c_str()))
     {
-      Serial.println("Health check published: " + String(payloadBuffer));
+      // Serial.println("Health check published."); // Reduce verbosity
     }
     else
     {
       Serial.println("Failed to publish health check.");
-      displayOLED("MQTT Publish Fail", "Health Check", "", "", true);
-      delay(1000);
+    }
+  }
+}
+
+/**
+ * @brief Callback function for handling incoming MQTT messages.
+ * @param topic The topic of the incoming message.
+ * @param payload The payload of the message.
+ * @param length The length of the payload.
+ */
+void mqttCallback(char *topic, byte *payload, unsigned int length)
+{
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  String messageTemp;
+  for (int i = 0; i < length; i++)
+  {
+    Serial.print((char)payload[i]);
+    messageTemp += (char)payload[i];
+  }
+  Serial.println();
+
+  // Check if the message is on the device-specific access topic
+  if (String(topic) == String(access_topic))
+  {
+    Serial.print("Received access command: ");
+    Serial.println(messageTemp);
+
+    if (messageTemp == "GRANT")
+    {
+      Serial.println("Access Granted!");
+      // Display "Access Granted" on OLED with inverted colors
+      displayOLED("Access Granted!", "", hostname, WiFi.localIP().toString(), true, true); // true for clear, true for invert
+
+      // Beep pattern: 1 long, 3 short
+      beepBuzzer(500, 1); // Long beep
+      delay(100);         // Short pause
+      beepBuzzer(150, 3); // 3 short beeps
+
+      // Placeholder for solenoid lock control
+      Serial.println("TODO: Activate Solenoid Lock");
+      // digitalWrite(SOLENOID_PIN, HIGH); // Example: Turn on solenoid
+      // delay(2000); // Keep door unlocked for a few seconds
+      // digitalWrite(SOLENOID_PIN, LOW);  // Example: Turn off solenoid
+
+      delay(3000); // Display message for a few seconds
+      displayLogo(); // Return to logo screen
+    }
+    else if (messageTemp == "DENY")
+    {
+      Serial.println("Access Denied!");
+      displayOLED("Access Denied", "", hostname, WiFi.localIP().toString(), true, false); // Normal colors
+      beepBuzzer(150, 3); // 3 short beeps for denial
+      delay(3000);
       displayLogo();
     }
+    else
+    {
+      Serial.print("Unknown command on access topic: ");
+      Serial.println(messageTemp);
+      displayOLED("Access Control", "Unknown Cmd:", messageTemp, "", true);
+      delay(2000);
+      displayLogo();
+    }
+  }
+  else
+  {
+    Serial.print("Message on unhandled topic: ");
+    Serial.println(topic);
   }
 }
