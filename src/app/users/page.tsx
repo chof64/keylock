@@ -151,6 +151,16 @@ export default function KeyUsersPage() {
     },
   });
 
+  const deleteKeyMutation = api.keyUsers.deleteKey.useMutation({
+    onSuccess: () => {
+      listKeyUsersQuery.refetch(); // Refetch users to reflect the key removal
+      toast.success("Key removed successfully!");
+    },
+    onError: (error) => {
+      toast.error(`Failed to remove key: ${error.message}`);
+    },
+  });
+
   const handleCreateKeyUser = () => {
     if (name.trim()) {
       createKeyUserMutation.mutate({
@@ -158,6 +168,16 @@ export default function KeyUsersPage() {
         email: email.trim() || undefined,
       });
     }
+  };
+
+  const handleRemoveKey = (keyId: string) => {
+    if (!keyId) {
+      toast.error("Invalid Key ID provided for removal.");
+      return;
+    }
+    // Optional: Add a confirmation dialog here before deleting
+    // For example: if (confirm("Are you sure you want to remove this key?")) { ... }
+    deleteKeyMutation.mutate({ keyId });
   };
 
   const utils = api.useUtils();
@@ -222,7 +242,11 @@ export default function KeyUsersPage() {
   };
 
   const handleCreateKey = () => {
-    if (!selectedKeyUserId || !rfidTagIdFromScan /* || !selectedNodeIdForScan */) { // selectedNodeIdForScan might not be strictly needed for key creation itself if not used by backend
+    if (
+      !selectedKeyUserId ||
+      !rfidTagIdFromScan /* || !selectedNodeIdForScan */
+    ) {
+      // selectedNodeIdForScan might not be strictly needed for key creation itself if not used by backend
       toast.error(
         "Missing user or RFID tag. Please ensure all are selected/scanned.",
       );
@@ -371,8 +395,17 @@ export default function KeyUsersPage() {
                           </Button>
                         )}
                         {user.key && (
-                          <Button variant="outline" size="sm" disabled>
-                            Manage Key
+                          <Button
+                            variant="destructive" // Changed variant to destructive for removal
+                            size="sm"
+                            // biome-ignore lint/style/noNonNullAssertion: <explanation>
+                            onClick={() => handleRemoveKey(user.key!.id)} // Call handleRemoveKey with the Key ID
+                            disabled={deleteKeyMutation.isPending} // Disable while deleting
+                          >
+                            {deleteKeyMutation.isPending &&
+                            deleteKeyMutation.variables?.keyId === user.key.id
+                              ? "Removing..."
+                              : "Remove Key"}
                           </Button>
                         )}
                         {/* Placeholder for future actions like Edit, Deactivate, Link to Platform User etc. */}
