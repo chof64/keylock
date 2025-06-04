@@ -10,19 +10,19 @@ Here is how the modules are connected to the ESP32 DEVKITV1:
 - OLED Display
   - GND -- ESP:GND
   - VCC -- ESP:3V3
-  - SCL -- ESP:D22
-  - SDA -- ESP:D23
+  - SCL -- ESP:D27
+  - SDA -- ESP:D26
 
 - Active Buzzer
   - GND -- ESP:GND
-  - VCC -- ESP:D4
+  - VCC -- ESP:D25
 
 - RFID Module
   - 3V3 -- ESP:3V3
-  - RST -- ESP:D34
+  - RST -- ESP:D21
   - GND -- ESP:GND
-  - IRQ -- ESP:D33
-  - MISO -- ESP:D25
-  - MOSI -- ESP:D26
-  - SCK -- ESP:D27
-  - SDA -- ESP:D32
+  - IRQ -- ESP:_Not connected_
+  - MISO -- ESP:D19
+  - MOSI -- ESP:D23
+  - SCK -- ESP:D18
+  - SDA -- ESP:D5
