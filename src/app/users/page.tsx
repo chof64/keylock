@@ -38,6 +38,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select"; // Added Select components
+import Link from "next/link"; // Added Link
 
 // Type for the Key model
 type Key = {
@@ -368,57 +369,62 @@ export default function KeyUsersPage() {
     <div className="container mx-auto p-4">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-bold">User Management (KeyLock Users)</h1>
-        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-          <DialogTrigger asChild>
-            <Button>Register New User</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Register New KeyLock User</DialogTitle>
-            </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="userName" className="text-right">
-                  Name
-                </Label>
-                <Input
-                  id="userName"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="col-span-3"
-                  placeholder="Enter user's full name"
-                />
+        <div className="flex gap-2">
+          <Link href="/access-logs">
+            <Button variant="outline">View All Access Logs</Button>
+          </Link>
+          <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+            <DialogTrigger asChild>
+              <Button>Register New User</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Register New KeyLock User</DialogTitle>
+              </DialogHeader>
+              <div className="grid gap-4 py-4">
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="userName" className="text-right">
+                    Name
+                  </Label>
+                  <Input
+                    id="userName"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    className="col-span-3"
+                    placeholder="Enter user's full name"
+                  />
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="userEmail" className="text-right">
+                    Email (Optional)
+                  </Label>
+                  <Input
+                    id="userEmail"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="col-span-3"
+                    placeholder="Enter user's email address"
+                  />
+                </div>
               </div>
-              <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="userEmail" className="text-right">
-                  Email (Optional)
-                </Label>
-                <Input
-                  id="userEmail"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="col-span-3"
-                  placeholder="Enter user's email address"
-                />
-              </div>
-            </div>
-            <DialogFooter>
-              <DialogClose asChild>
-                <Button variant="outline">Cancel</Button>
-              </DialogClose>
-              <Button
-                type="submit"
-                onClick={handleCreateKeyUser}
-                disabled={createKeyUserMutation.isPending || !name.trim()}
-              >
-                {createKeyUserMutation.isPending
-                  ? "Registering..."
-                  : "Register User"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+              <DialogFooter>
+                <DialogClose asChild>
+                  <Button variant="outline">Cancel</Button>
+                </DialogClose>
+                <Button
+                  type="submit"
+                  onClick={handleCreateKeyUser}
+                  disabled={createKeyUserMutation.isPending || !name.trim()}
+                >
+                  {createKeyUserMutation.isPending
+                    ? "Registering..."
+                    : "Register User"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       {listKeyUsersQuery.data && listKeyUsersQuery.data.length === 0 && (
@@ -443,7 +449,6 @@ export default function KeyUsersPage() {
                   <TableHead>Email</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>RFID Key ID</TableHead>
-                  <TableHead>Registered On</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -461,9 +466,6 @@ export default function KeyUsersPage() {
                     </TableCell>
                     <TableCell className="font-mono text-xs">
                       {user.key ? user.key.keyId : "No Key"}
-                    </TableCell>
-                    <TableCell>
-                      {new Date(user.createdAt).toLocaleDateString()}
                     </TableCell>
                     <TableCell>
                       <div className="flex space-x-2">
@@ -490,6 +492,11 @@ export default function KeyUsersPage() {
                               : "Remove Key"}
                           </Button>
                         )}
+                        <Link href={`/access-logs?keyUserId=${user.id}`}>
+                          <Button variant="ghost" size="sm">
+                            View Logs
+                          </Button>
+                        </Link>
                         {/* Placeholder for future actions like Edit, Deactivate, Link to Platform User etc. */}
                         {/* <Button variant="outline" size="sm" disabled className="ml-2"> Manage User </Button> */}
                       </div>

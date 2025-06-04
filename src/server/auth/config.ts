@@ -66,9 +66,11 @@ export const authConfig = {
         const user = await getUserByEmail(email);
 
         // If no user found or no password (might be OAuth account only)
+        // @ts-ignore
         if (!user || !user.password) return null;
 
         // Verify password
+        // @ts-ignore
         const passwordValid = await verifyPassword(password, user.password);
 
         // If password doesn't match

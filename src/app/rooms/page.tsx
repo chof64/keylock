@@ -16,6 +16,7 @@ import {
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
+import Link from "next/link"; // Import Link
 import {
   Select,
   SelectContent,
@@ -297,6 +298,16 @@ export default function RoomsPage() {
                 </CardTitle>
                 <CardDescription>
                   Created: {new Date(room.createdAt).toLocaleDateString()}
+                  <br />
+                  <Link href={`/access-logs?roomId=${room.id}`} passHref>
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="p-0 h-auto text-blue-500 hover:text-blue-700"
+                    >
+                      View Access Logs
+                    </Button>
+                  </Link>
                 </CardDescription>
               </CardHeader>
               <CardContent>

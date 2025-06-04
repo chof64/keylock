@@ -50,8 +50,6 @@ model User {
     image         String?
     accounts      Account[]
     sessions      Session[]
-    // Optional for linking to Key records if a user can "own" keys
-    // keys          Key[]
 }
 
 model VerificationToken {
@@ -64,43 +62,83 @@ model VerificationToken {
 
 // Model for physical or virtual keys
 model Key {
-    id        String   @id @default(cuid())
-    keyId     String   @unique // The unique identifier of the key (e.g., RFID tag)
-    name      String? // Optional friendly name for the key
-    isActive  Boolean  @default(true) // Whether the key is currently active
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
-
-    // Example of a relation if keys are assigned to users
-    // userId    String?
-    // user      User?    @relation(fields: [userId], references: [id])
-
-    // Example of a relation if keys are associated with specific locks/nodes
-    // nodeId    String?
-    // node      Node?    @relation(fields: [nodeId], references: [id])
-
-    accessLogs AccessLog[] // Logs of when this key was used
+  id        String   @id @default(cuid())
+  keyId     String   @unique // RFID Tag ID
+  name      String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  keyUserId String?  @unique // Foreign key to KeyUser, a key can only be assigned to one user
+  keyUser   KeyUser? @relation(fields: [keyUserId], references: [id], onDelete: SetNull)
 }
 
-// Model for access logs (successful or failed attempts)
-model AccessLog {
-    id        String   @id @default(cuid())
-    keyId     String   // The keyId used for the access attempt
-    nodeId    String   // The nodeId of the device that logged the attempt
-    timestamp DateTime @default(now())
-    accessGranted Boolean // Whether access was granted or denied
-    message   String?  // Optional message, e.g., "Access Denied: Unknown Key"
+model KeyUser {
+  id               String  @id @default(cuid())
+  name             String
+  email            String? @unique
+  isActive         Boolean @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @default(now())
+  platformUserId   String? // For future integration with a central user management
+  key              Key? // Relation to the Key model
 
-    key  Key  @relation(fields: [keyId], references: [keyId])
-    node Node @relation(fields: [nodeId], references: [id])
+  roomPermissions KeyUserRoomPermission[] // Permissions for rooms
+  accessLogs      AccessLog[] // Access logs initiated by this user
 }
 
 model Node {
-    id        String   @id // Unique identifier for the node (e.g., MAC address, ESP32 chip ID)
-    name      String?  // Optional friendly name for the node
-    lastSeen  DateTime @default(now()) // Last time a healthcheck was received
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
+  id        String   @id @default(cuid())
+  name      String?
+  lastSeen  DateTime @default(now())
+  roomId    String?
+  ipAddress String? // Optional: IP address of the node
+  macAddress String? // Optional: MAC address of the node
+  signalStrength String?
+  uptime    String? // Optional: Uptime in seconds
+  room      Room?    @relation(fields: [roomId], references: [id], onDelete: SetNull) // Node belongs to one Room
 
-    accessLogs AccessLog[] // Logs of access attempts from this node
+  accessLogs AccessLog[] // Access logs related to this node
+}
+
+model Room {
+  id                 String                    @id @default(cuid())
+  name               String
+  createdAt          DateTime                  @default(now())
+  updatedAt          DateTime                  @updatedAt
+  nodes              Node[] // Room can have multiple Nodes
+  keyUserPermissions KeyUserRoomPermission[] // Permissions for key users in this room
+  accessLogs         AccessLog[]               // Access logs related to this room
+}
+
+// Renamed and updated join table for KeyUser and Room many-to-many relationship
+model KeyUserRoomPermission {
+    keyUserId String
+    roomId    String
+    keyUser   KeyUser @relation(fields: [keyUserId], references: [id], onDelete: Cascade)
+    room      Room    @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+    assignedAt DateTime @default(now())
+    assignedBy String? // Optional: to track who assigned the permission
+
+    @@id([keyUserId, roomId])
+}
+
+// New model for Access Logs
+model AccessLog {
+  id            String    @id @default(cuid())
+  timestamp     DateTime  @default(now())
+  accessGranted Boolean
+  reason        String?
+  rfidTag       String
+  keyUserId     String?
+  keyUser       KeyUser?  @relation(fields: [keyUserId], references: [id], onDelete: SetNull)
+  nodeId        String
+  node          Node      @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  roomId        String?
+  room          Room?     @relation(fields: [roomId], references: [id], onDelete: SetNull)
+
+  @@index([keyUserId])
+  @@index([nodeId])
+  @@index([roomId])
+  @@index([timestamp])
 }

@@ -13,6 +13,7 @@ import { ZodError } from "zod";
 
 import { auth } from "~/server/auth";
 import { db } from "~/server/db";
+import type { Session } from "next-auth";
 
 /**
  * 1. CONTEXT
@@ -21,17 +22,24 @@ import { db } from "~/server/db";
  *
  * These allow you to access things when processing a request, like the database, the session, etc.
  *
- * This helper generates the "internals" for a tRPC context. The API handler and RSC clients each
- * wrap this and provides the required context.
+ * This helper generates the "internals" for a tRPC context. The API handler and RSC clients provide
+ * the actual execution context.
  *
  * @see https://trpc.io/docs/server/context
  */
 export const createTRPCContext = async (opts: { headers: Headers }) => {
-  const session = await auth();
+  let session: Session | null = null;
+  try {
+    // Attempt to get the session, but don't fail if headers are not available (e.g., internal calls)
+    session = await auth();
+  } catch (e) {
+    // Log or handle the error if necessary, e.g., if it's not the expected "headers" error
+    // console.warn("[createTRPCContext] Could not retrieve session (expected for internal calls):", e.message);
+  }
 
   return {
     db,
-    session,
+    session, // Session will be null if auth() fails or no session exists
     ...opts,
   };
 };

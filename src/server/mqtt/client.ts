@@ -1,7 +1,8 @@
-import mqtt from "mqtt";
 import { env } from "~/env";
-import { db } from "~/server/db"; // Import db for logging
-import { createCaller } from "~/server/api/root"; // To call the new tRPC procedure
+import mqtt from "mqtt";
+import { db } from "~/server/db";
+import { createCaller } from "~/server/api/root";
+import { createTRPCContext } from "~/server/api/trpc";
 
 const MQTT_BROKER_URL = env.MQTT_BROKER_URL;
 const HEALTH_TOPIC_PATTERN = "devices/keylock/health/+"; // Updated to wildcard
@@ -50,7 +51,14 @@ export function connectMqtt() {
       const messageString = message.toString();
       console.log(`[MQTT] Received on '${topic}': '${messageString}'`);
 
+      const topicParts = topic.split("/");
+
       if (topic.startsWith("devices/keylock/health/")) {
+        const nodeId = topicParts[3];
+        if (!nodeId) {
+          console.error(`[MQTT] Health check from unknown node: ${topic}`);
+          return;
+        }
         try {
           const healthData = JSON.parse(messageString);
           // New payload: { "nodeId", "ipAddress", "macAddress", "signalStrength", "uptime" }
@@ -93,48 +101,42 @@ export function connectMqtt() {
           );
         }
       } else if (topic.startsWith("devices/keylock/read/")) {
-        // const extractedNodeIdFromTopic = topic.substring("devices/keylock/read/".length);
+        const nodeId = topicParts[3];
+        if (!nodeId) {
+          console.error(`[MQTT] Read event from unknown node: ${topic}`);
+          return;
+        }
         try {
-          const readData = JSON.parse(messageString);
-          // New payload: { "nodeId", "ipAddress", "macAddress", "cardId", "isCreateMode" }
-          const { nodeId, ipAddress, macAddress, cardId, isCreateMode } =
-            readData;
+          const payload = JSON.parse(messageString);
+          const rfidTag = payload.cardId as string; // Assert type if confident
+          const isCreateMode = (payload.isCreateMode as boolean) ?? false;
+
+          if (!rfidTag) {
+            console.error(
+              `[MQTT] Invalid message on ${topic}: 'cardId' missing.`,
+            );
+            return;
+          }
 
           console.log(
-            `[MQTT Read] Card '${cardId}' read at Node '${nodeId}' (isCreateMode: ${isCreateMode}). IP: ${ipAddress}, MAC: ${macAddress}`,
+            `[MQTT] Storing card ${rfidTag} for node ${nodeId} (Create Mode: ${isCreateMode}).`,
           );
-
-          // Store the scanned card temporarily, including its mode
           lastScannedCards.set(nodeId, {
-            cardId,
+            cardId: rfidTag,
             timestamp: Date.now(),
-            isCreateMode: !!isCreateMode, // Ensure boolean
+            isCreateMode: isCreateMode,
           });
 
           if (!isCreateMode) {
-            const trpcCaller = createCaller({
-              db,
-              session: null,
-              headers: new Headers(),
+            const context = await createTRPCContext({ headers: new Headers() });
+            const apiCaller = createCaller(context);
+            await apiCaller.accessControl.checkAccessAndNotifyDevice({
+              rfidTagId: rfidTag,
+              nodeId: nodeId,
             });
-            const result =
-              await trpcCaller.accessControl.checkAccessAndNotifyDevice({
-                rfidTagId: cardId, // Use cardId from payload
-                nodeId: nodeId, // Use nodeId from payload
-              });
             console.log(
-              `[AccessCheck] Result for Card '${cardId}' at Node '${nodeId}': Granted: ${result.granted}, Status: ${result.status}`,
+              `[MQTT] Triggered access control for RFID ${rfidTag} at Node ${nodeId}.`,
             );
-          } else {
-            console.log(
-              `[MQTT Read] Node '${nodeId}' is in key creation mode. Card '${cardId}' logged for UI pickup.`,
-            );
-            // The UI (page.tsx) polls `keyUsers.getScannedRfidTag` which will now get this cardId.
-            // The actual key creation is initiated by the UI via `keyUsers.createKey` mutation.
-            // After `createKey` succeeds or fails, the UI should then call another tRPC mutation
-            // (e.g., `keyManagement.notifyDeviceRegistrationStatus`) which will publish
-            // KEY_REG_SUCCESS or KEY_REG_FAIL back to the device.
-            // For now, we just log it here. The ESP32 will timeout if no KEY_REG_SUCCESS/FAIL is received.
           }
         } catch (error) {
           console.error(

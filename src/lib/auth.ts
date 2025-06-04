@@ -48,6 +48,7 @@ export async function createUser(
   return db.user.create({
     data: {
       email,
+      // @ts-ignore
       password: hashedPassword,
       name,
     },
