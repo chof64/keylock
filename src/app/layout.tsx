@@ -5,6 +5,7 @@ import { Mona_Sans } from "next/font/google";
 
 import Header from "~/components/Header";
 import { TRPCReactProvider } from "~/trpc/react";
+import { Toaster } from "~/components/ui/sonner"; // Import Toaster
 
 export const metadata: Metadata = {
   title: "Keylock - Centralized RFID Door Lock System",
@@ -28,6 +29,7 @@ export default function RootLayout({
         <TRPCReactProvider>
           <Header />
           {children}
+          <Toaster /> {/* Add Toaster here */}
         </TRPCReactProvider>
       </body>
     </html>
