@@ -21,15 +21,15 @@ model Account {
     type                     String
     provider                 String
     providerAccountId        String
-    refresh_token            String? // @db.Text
-    access_token             String? // @db.Text
+    refresh_token            String?
+    access_token             String?
     expires_at               Int?
     token_type               String?
     scope                    String?
-    id_token                 String? // @db.Text
+    id_token                 String?
     session_state            String?
+
     user                     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-    refresh_token_expires_in Int?
 
     @@unique([provider, providerAccountId])
 }
@@ -47,10 +47,11 @@ model User {
     name          String?
     email         String?   @unique
     emailVerified DateTime?
-    password      String?
     image         String?
     accounts      Account[]
     sessions      Session[]
+    // Optional for linking to Key records if a user can "own" keys
+    // keys          Key[]
 }
 
 model VerificationToken {
@@ -59,4 +60,47 @@ model VerificationToken {
     expires    DateTime
 
     @@unique([identifier, token])
+}
+
+// Model for physical or virtual keys
+model Key {
+    id        String   @id @default(cuid())
+    keyId     String   @unique // The unique identifier of the key (e.g., RFID tag)
+    name      String? // Optional friendly name for the key
+    isActive  Boolean  @default(true) // Whether the key is currently active
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    // Example of a relation if keys are assigned to users
+    // userId    String?
+    // user      User?    @relation(fields: [userId], references: [id])
+
+    // Example of a relation if keys are associated with specific locks/nodes
+    // nodeId    String?
+    // node      Node?    @relation(fields: [nodeId], references: [id])
+
+    accessLogs AccessLog[] // Logs of when this key was used
+}
+
+// Model for access logs (successful or failed attempts)
+model AccessLog {
+    id        String   @id @default(cuid())
+    keyId     String   // The keyId used for the access attempt
+    nodeId    String   // The nodeId of the device that logged the attempt
+    timestamp DateTime @default(now())
+    accessGranted Boolean // Whether access was granted or denied
+    message   String?  // Optional message, e.g., "Access Denied: Unknown Key"
+
+    key  Key  @relation(fields: [keyId], references: [keyId])
+    node Node @relation(fields: [nodeId], references: [id])
+}
+
+model Node {
+    id        String   @id // Unique identifier for the node (e.g., MAC address, ESP32 chip ID)
+    name      String?  // Optional friendly name for the node
+    lastSeen  DateTime @default(now()) // Last time a healthcheck was received
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    accessLogs AccessLog[] // Logs of access attempts from this node
 }
