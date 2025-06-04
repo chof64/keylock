@@ -55,6 +55,7 @@ const int numWifiNetworks = sizeof(wifiNetworks) / sizeof(wifiNetworks[0]);
 IPAddress mqtt_server_ip(192, 168, 1, 200);          // Static IP address of the MQTT server
 const int mqtt_port = 1883;                          // MQTT server port
 const char *health_topic = "devices/keylock/health"; // MQTT topic for health checks
+const char *scanned_rfid_topic = "devices/keylock/scanned"; // MQTT topic for scanned RFID tags
 IPAddress mqttServerIp;                              // Stores the resolved IP of the MQTT server
 
 // Global Variables
@@ -77,7 +78,7 @@ const long mqttRetryInterval = 15000;    // Interval for retrying MQTT connectio
 // Global variables for MQTT Health Check
 unsigned long lastHealthCheck = 0;
 // const unsigned long healthCheckInterval = 60000; // 60 seconds health check interval
-const unsigned long healthCheckInterval = 5000; // 5 seconds health check interval
+const unsigned long healthCheckInterval = 30000; // 5 seconds health check interval
 
 // Variables for enhanced WiFi/MQTT connection logic
 int currentWifiNetworkIndex = 0;
@@ -522,40 +523,53 @@ void scanRFIDAndBeep()
   if (!mfrc522.PICC_ReadCardSerial())
   {
     Serial.println("RFID (v2): Card read failed."); // Reduced verbosity
-    // Optionally display an error on OLED if read fails after card is present
-    // displayOLED("RFID Error", "Read Failed");
-    // delay(1000);
-    // displayLogo();
-    // mfrc522.PICC_HaltA(); // Halt PICC before returning if needed, though DumpToSerial does this.
     return; // Failed to read serial
   }
-  // Serial.println("RFID (v2): Card UID read successfully by PICC_ReadCardSerial()."); // Reduced verbosity
 
   // Construct UID string for display and other uses
   String uidString = "";
   Serial.print("Card UID (v2):");
   for (byte i = 0; i < mfrc522.uid.size; i++)
   {
-    Serial.print(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " "); // Add leading zero for single hex digit
+    Serial.print(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " ");
     Serial.print(mfrc522.uid.uidByte[i], HEX);
-    uidString += (mfrc522.uid.uidByte[i] < 0x10 ? "0" : ""); // Add leading zero for String
+    uidString += (mfrc522.uid.uidByte[i] < 0x10 ? "0" : "");
     uidString += String(mfrc522.uid.uidByte[i], HEX);
   }
   Serial.println();
   uidString.toUpperCase();
 
   displayOLED("Card Detected!", "UID:", uidString);
-  beepBuzzer(200, 2); // Beep twice for 200ms each
+  beepBuzzer(200, 2);
 
-  // Dump card details to Serial monitor (includes PICC_HaltA)
-  // Serial.println(F("Dumping card details to Serial (MFRC522v2):")); // Reduced verbosity
-  // MFRC522Debug::PICC_DumpToSerial(mfrc522, Serial, &(mfrc522.uid)); // Reduced verbosity
-  // PICC_HaltA() is automatically called by PICC_DumpToSerial.
-  // PCD_StopCrypto1() is not present in the example and typically not needed for basic UID reading.
+  // Publish RFID UID to MQTT
+  if (mqttClient.connected())
+  {
+    char payloadBuffer[128];
+    String currentHostname = hostname;
+    if (currentHostname == "") {
+      currentHostname = "keylock-" + getMacAddressString(false); // Fallback hostname
+    }
+
+    sprintf(payloadBuffer, "{\"nodeId\":\"%s\",\"rfidTagId\":\"%s\"}",
+            currentHostname.c_str(),
+            uidString.c_str());
+
+    if (mqttClient.publish(scanned_rfid_topic, payloadBuffer))
+    {
+      Serial.println("Scanned RFID UID published: " + String(payloadBuffer));
+    }
+    else
+    {
+      Serial.println("Failed to publish scanned RFID UID.");
+    }
+  } else {
+    Serial.println("MQTT not connected. Cannot publish scanned RFID UID.");
+  }
 
   delay(2000);   // Display UID on OLED for 2 seconds
-  displayLogo(); // Return to logo/status screen
-  lastRFIDScanMessageTime = millis(); // Reset scan message timer as a card was processed
+  displayLogo();
+  lastRFIDScanMessageTime = millis();
 }
 
 /**
