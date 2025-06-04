@@ -100,27 +100,86 @@ export const keyUsersRouter = createTRPCRouter({
     return db.keyUser.findMany({
       orderBy: { createdAt: "desc" },
       include: {
-        key: true, // Include the related Key record
+        key: true, // Corrected: Include the related key (singular)
       },
     });
   }),
 
-  // Procedure to get the last scanned RFID tag for a specific node
+  // Procedure to get the last scanned RFID tag for a specific node, specifically for create mode
   getScannedRfidTag: publicProcedure
-    .input(z.object({ nodeId: z.string() }))
+    .input(
+      z.object({ nodeId: z.string(), forCreateMode: z.boolean().optional() }),
+    ) // Added forCreateMode
     .query(({ input }) => {
-      const tagInfo = mqttClient.getLastScannedTag(input.nodeId);
-      return tagInfo;
+      // Pass the forCreateMode input to the MQTT client method
+      const tagInfo = mqttClient.getLastScannedCard(
+        input.nodeId,
+        input.forCreateMode,
+      );
+      // Rename rfidTagId to cardId for consistency if it's part of the return type
+      // Assuming getLastScannedCard returns { cardId: string } | null
+      return tagInfo
+        ? { cardId: tagInfo.cardId, rfidTagId: tagInfo.cardId } // Ensure rfidTagId is also returned if frontend expects it
+        : null;
     }),
 
-  // Procedure to clear the RFID cache for a specific node
-  clearRfidCacheForNode: publicProcedure
+  // Renamed Procedure to clear the last scanned card for a specific node
+  clearLastScannedCardForNode: publicProcedure // Renamed from clearRfidCacheForNode
     .input(z.object({ nodeId: z.string() }))
     .mutation(({ input }) => {
-      mqttClient.clearScannedTagForNode(input.nodeId);
+      mqttClient.clearLastScannedCard(input.nodeId); // Updated to new method name
       return {
         success: true,
-        message: `Cache cleared for node ${input.nodeId}`,
+        message: `Scanned card cache cleared for node ${input.nodeId}`,
+      };
+    }),
+
+  // Procedure to command a node to enter key registration mode
+  startKeyRegistrationOnNode: publicProcedure
+    .input(z.object({ nodeId: z.string() }))
+    .mutation(({ input }) => {
+      const success = mqttClient.publishAdminCommand(input.nodeId, {
+        command: "START_KEY_REGISTRATION",
+      });
+      if (!success) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            "Failed to send START_KEY_REGISTRATION command to node. MQTT client might be disconnected.",
+        });
+      }
+      return {
+        success: true,
+        message: `Key registration mode started on node ${input.nodeId}.`,
+      };
+    }),
+
+  // Procedure to notify the device of key registration success or failure
+  notifyDeviceKeyRegistrationResult: publicProcedure
+    .input(
+      z.object({
+        nodeId: z.string(),
+        cardId: z.string(),
+        registrationSuccess: z.boolean(),
+      }),
+    )
+    .mutation(({ input }) => {
+      const command = input.registrationSuccess
+        ? "KEY_REG_SUCCESS"
+        : "KEY_REG_FAIL";
+      const success = mqttClient.publishAdminCommand(input.nodeId, {
+        command: command,
+        cardId: input.cardId,
+      });
+      if (!success) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Failed to send ${command} to node. MQTT client might be disconnected.`,
+        });
+      }
+      return {
+        success: true,
+        message: `${command} notification sent for card ${input.cardId} to node ${input.nodeId}.`,
       };
     }),
 

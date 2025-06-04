@@ -1,18 +1,22 @@
+import { env } from "~/env";
 import mqtt from "mqtt";
 import { db } from "~/server/db";
-import { env } from "~/env.js";
+import { createCaller } from "~/server/api/root";
+import { createTRPCContext } from "~/server/api/trpc";
 
 const MQTT_BROKER_URL = env.MQTT_BROKER_URL;
-const HEALTH_TOPIC = "devices/keylock/health";
-const SCANNED_RFID_TOPIC = "devices/keylock/scanned"; // New topic for scanned RFID tags
+const HEALTH_TOPIC_PATTERN = "devices/keylock/health/+"; // Updated to wildcard
+const READ_TOPIC_PATTERN = "devices/keylock/read/+"; // Updated to wildcard and new name
+const ADMIN_TOPIC_BASE = "devices/keylock/admin"; // Base for admin topics
 
 // In-memory store for the last scanned RFID tag per node
-// Stores { rfidTagId: string, timestamp: number }
-const lastScannedTags = new Map<
+// Stores { cardId: string, timestamp: number, isCreateMode: boolean }
+const lastScannedCards = new Map<
   string,
-  { rfidTagId: string; timestamp: number }
+  { cardId: string; timestamp: number; isCreateMode: boolean }
 >();
-const SCANNED_TAG_TTL_MS = 30000; // Tag is valid for 30 seconds
+const SCANNED_TAG_TTL_MS = 30000; // Tag is valid for 30 seconds for regular scans
+// For create mode, the UI will poll. We store it here so getScannedRfidTag can pick it up.
 
 let client: mqtt.MqttClient | null = null;
 
@@ -22,86 +26,121 @@ export function connectMqtt() {
 
     client.on("connect", () => {
       console.log("Connected to MQTT broker");
-      // Subscribe to Health Topic
-      client?.subscribe(HEALTH_TOPIC, (err) => {
+      // Subscribe to Health Topic Pattern
+      client?.subscribe(HEALTH_TOPIC_PATTERN, (err) => {
         if (err) {
-          console.error("Failed to subscribe to health topic:", err);
+          console.error("Failed to subscribe to health topic pattern:", err);
         } else {
-          console.log(`Subscribed to topic: ${HEALTH_TOPIC}`);
+          console.log(
+            "Subscribed to health topic pattern:",
+            HEALTH_TOPIC_PATTERN,
+          );
         }
       });
-      // Subscribe to Scanned RFID Topic
-      client?.subscribe(SCANNED_RFID_TOPIC, (err) => {
+      // Subscribe to device-specific Read Topics
+      client?.subscribe(READ_TOPIC_PATTERN, (err) => {
         if (err) {
-          console.error("Failed to subscribe to scanned RFID topic:", err);
+          console.error("Failed to subscribe to read topic pattern:", err);
         } else {
-          console.log(`Subscribed to topic: ${SCANNED_RFID_TOPIC}`);
+          console.log("Subscribed to read topic pattern:", READ_TOPIC_PATTERN);
         }
       });
     });
 
     client.on("message", async (topic, message) => {
-      if (topic === HEALTH_TOPIC) {
-        const rawMessage = message.toString();
-        console.log(`Raw message received on topic ${topic}: ${rawMessage}`);
-        try {
-          const healthData = JSON.parse(rawMessage);
-          const { nodeId, name, ...rest } = healthData;
+      const messageString = message.toString();
+      console.log(`[MQTT] Received on '${topic}': '${messageString}'`);
 
-          if (!nodeId) {
+      const topicParts = topic.split("/");
+
+      if (topic.startsWith("devices/keylock/health/")) {
+        const nodeId = topicParts[3];
+        if (!nodeId) {
+          console.error(`[MQTT] Health check from unknown node: ${topic}`);
+          return;
+        }
+        try {
+          const healthData = JSON.parse(messageString);
+          // New payload: { "nodeId", "ipAddress", "macAddress", "signalStrength", "uptime" }
+          const { nodeId, ipAddress, macAddress, signalStrength, uptime } =
+            healthData;
+
+          if (nodeId) {
+            // Assuming nodeId is the primary identifier (hostname from ESP32)
+            await db.node.upsert({
+              where: { id: nodeId },
+              update: {
+                name: nodeId, // Assuming name is the same as nodeId/hostname
+                lastSeen: new Date(),
+                ipAddress: ipAddress,
+                macAddress: macAddress, // Store MAC address
+                signalStrength: String(signalStrength), // Store signal strength
+                uptime: String(uptime), // Store uptime
+              },
+              create: {
+                id: nodeId,
+                name: nodeId,
+                lastSeen: new Date(),
+                ipAddress: ipAddress,
+                macAddress: macAddress,
+                signalStrength: String(signalStrength),
+                uptime: String(uptime),
+              },
+            });
+            console.log(`[MQTT Health] Node '${nodeId}' updated/created.`);
+          } else {
             console.warn(
-              "Received healthcheck without nodeId. Full data:",
+              "[MQTT Health] Invalid health data (missing nodeId):",
               healthData,
+            );
+          }
+        } catch (error) {
+          console.error(
+            "[MQTT Health] Error processing health message:",
+            error,
+          );
+        }
+      } else if (topic.startsWith("devices/keylock/read/")) {
+        const nodeId = topicParts[3];
+        if (!nodeId) {
+          console.error(`[MQTT] Read event from unknown node: ${topic}`);
+          return;
+        }
+        try {
+          const payload = JSON.parse(messageString);
+          const rfidTag = payload.cardId as string; // Assert type if confident
+          const isCreateMode = (payload.isCreateMode as boolean) ?? false;
+
+          if (!rfidTag) {
+            console.error(
+              `[MQTT] Invalid message on ${topic}: 'cardId' missing.`,
             );
             return;
           }
 
           console.log(
-            `Parsed healthcheck from nodeId '${nodeId}'. Full data:`,
-            healthData,
+            `[MQTT] Storing card ${rfidTag} for node ${nodeId} (Create Mode: ${isCreateMode}).`,
           );
-
-          const result = await db.node.upsert({
-            where: { id: nodeId },
-            update: {
-              name: name || undefined,
-              lastSeen: new Date(),
-            },
-            create: {
-              id: nodeId,
-              name: name || undefined,
-              lastSeen: new Date(),
-            },
-          });
-          console.log(
-            `Node '${nodeId}' upserted successfully. DB Result:`,
-            result,
-          );
-        } catch (error) {
-          console.error(
-            `Error processing healthcheck message. Raw message: '${rawMessage}'. Error:`,
-            error,
-          );
-        }
-      } else if (topic === SCANNED_RFID_TOPIC) {
-        const rawMessage = message.toString();
-        console.log(`Raw message received on topic ${topic}: ${rawMessage}`);
-        try {
-          const scannedData = JSON.parse(rawMessage) as {
-            nodeId: string;
-            rfidTagId: string;
-          };
-          // Store the scanned tag with a timestamp
-          lastScannedTags.set(scannedData.nodeId, {
-            rfidTagId: scannedData.rfidTagId,
+          lastScannedCards.set(nodeId, {
+            cardId: rfidTag,
             timestamp: Date.now(),
+            isCreateMode: isCreateMode,
           });
-          console.log(
-            `Stored scanned RFID from Node \'${scannedData.nodeId}\': ${scannedData.rfidTagId}`,
-          );
+
+          if (!isCreateMode) {
+            const context = await createTRPCContext({ headers: new Headers() });
+            const apiCaller = createCaller(context);
+            await apiCaller.accessControl.checkAccessAndNotifyDevice({
+              rfidTagId: rfidTag,
+              nodeId: nodeId,
+            });
+            console.log(
+              `[MQTT] Triggered access control for RFID ${rfidTag} at Node ${nodeId}.`,
+            );
+          }
         } catch (error) {
           console.error(
-            `Error processing scanned RFID message. Raw message: \'${rawMessage}\'. Error:`,
+            `[MQTT Read] Error processing read message for topic '${topic}':`,
             error,
           );
         }
@@ -142,51 +181,74 @@ if (process.env.NODE_ENV !== "test") {
 // Optional: Export a function to get the client instance if needed elsewhere
 export const getMqttClient = () => client;
 
-// Function to retrieve the last scanned tag for a node
-export const getLastScannedTag = (
+// Function to retrieve the last scanned card for a node
+// Updated to consider isCreateMode for specific retrieval by the UI
+export const getLastScannedCard = (
   nodeId: string,
-): { rfidTagId: string } | null => {
-  const entry = lastScannedTags.get(nodeId);
-  if (entry && Date.now() - entry.timestamp < SCANNED_TAG_TTL_MS) {
-    // Optionally, clear the tag after retrieval to ensure it's used once
-    // lastScannedTags.delete(nodeId);
-    return { rfidTagId: entry.rfidTagId };
+  forCreateMode?: boolean, // If true, only return if the scan was in create mode
+): { cardId: string } | null => {
+  const entry = lastScannedCards.get(nodeId);
+  if (!entry) return null;
+
+  // If forCreateMode is true, only return if the scan was a create mode scan.
+  // The TTL for create mode scans is handled by the UI polling; if it's old, UI won't use it.
+  if (forCreateMode) {
+    if (entry.isCreateMode) {
+      // For create mode, we don't strictly need a TTL here as the UI controls the listening window.
+      // However, to prevent very old create mode scans from being picked up if UI state is weird,
+      // we can add a longer TTL or rely on UI to clear it.
+      // For now, if it's a create mode scan, return it.
+      return { cardId: entry.cardId };
+    }
+    return null; // Not a create mode scan, or no scan for this node
   }
-  // Clear expired tag
-  if (entry && Date.now() - entry.timestamp >= SCANNED_TAG_TTL_MS) {
-    lastScannedTags.delete(nodeId);
+
+  // For regular scans, respect the TTL
+  if (
+    !entry.isCreateMode &&
+    Date.now() - entry.timestamp < SCANNED_TAG_TTL_MS
+  ) {
+    return { cardId: entry.cardId };
+  }
+
+  // Clear expired non-create-mode card or if it was a create mode scan not requested for create mode
+  if (
+    Date.now() - entry.timestamp >= SCANNED_TAG_TTL_MS ||
+    (entry.isCreateMode && !forCreateMode)
+  ) {
+    lastScannedCards.delete(nodeId);
   }
   return null;
 };
 
-// Function to get the last scanned tag for a node, respecting TTL
+// Function to clear the last scanned card for a node (e.g., when UI starts a new scan session)
+export const clearLastScannedCard = (nodeId: string) => {
+  lastScannedCards.delete(nodeId);
+  console.log(`[MQTT Cache] Cleared for node ${nodeId}.`);
+};
+
+// Function to publish admin commands, e.g., to start/stop key registration mode
+export const publishAdminCommand = (nodeId: string, command: object) => {
+  if (!client || !client.connected) {
+    console.error("[MQTT Admin] Client not connected. Cannot send command.");
+    return false;
+  }
+  const topic = `${ADMIN_TOPIC_BASE}/${nodeId}`;
+  const message = JSON.stringify(command);
+  console.log(`[MQTT Admin] Publishing to '${topic}': ${message}`);
+  client.publish(topic, message, { qos: 1 }, (err) => {
+    if (err) {
+      console.error(`[MQTT Admin] Failed to publish command to ${topic}:`, err);
+    }
+  });
+  return true;
+};
+
+// Updated mqttClient export to include new functions
 export const mqttClient = {
   connect: connectMqtt,
-  getLastScannedTag: (nodeId: string): { rfidTagId: string } | null => {
-    const entry = lastScannedTags.get(nodeId);
-    if (entry && Date.now() - entry.timestamp < SCANNED_TAG_TTL_MS) {
-      return { rfidTagId: entry.rfidTagId };
-    }
-    if (entry) {
-      // Entry exists but expired
-      lastScannedTags.delete(nodeId); // Clean up expired entry
-    }
-    return null;
-  },
-
-  /**
-   * Clears the cached RFID tag for a specific node.
-   * @param nodeId The ID of the node for which to clear the cache.
-   */
-  clearScannedTagForNode: (nodeId: string): void => {
-    const deleted = lastScannedTags.delete(nodeId);
-    if (deleted) {
-      console.log(`MQTT Cache: Cleared tag for node ${nodeId}`);
-    } else {
-      // Optional: log if no tag was found to clear, or handle silently
-      // console.log(`MQTT Cache: No tag to clear for node ${nodeId}, or node not found.`);
-    }
-  },
-
-  // ...any other existing methods...
+  getLastScannedCard,
+  clearLastScannedCard,
+  publishAdminCommand,
+  getClient: getMqttClient, // Expose the raw client if needed
 };

@@ -3,6 +3,8 @@
 import { api } from "@/trpc/react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import Link from "next/link"; // Import Link
+import { Button } from "@/components/ui/button"; // Import Button
 import {
   Table,
   TableBody,
@@ -21,8 +23,9 @@ export default function NodesPage() {
   if (!nodes || nodes.length === 0) return <p>No nodes found.</p>;
 
   const isOnline = (lastSeen: Date) => {
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-    return new Date(lastSeen) > fiveMinutesAgo;
+    // Check if the node was seen in the last minute
+    const oneMinuteAgo = new Date(Date.now() - 1 * 60 * 1000);
+    return new Date(lastSeen) > oneMinuteAgo;
   };
 
   return (
@@ -39,6 +42,7 @@ export default function NodesPage() {
                 <TableHead>ID</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Last Seen</TableHead>
+                <TableHead>Actions</TableHead> {/* Add Actions column */}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -59,6 +63,15 @@ export default function NodesPage() {
                     {formatDistanceToNow(new Date(node.lastSeen), {
                       addSuffix: true,
                     })}
+                  </TableCell>
+                  <TableCell>
+                    {" "}
+                    {/* Add cell for the button */}
+                    <Link href={`/access-logs?nodeId=${node.id}`} passHref>
+                      <Button variant="outline" size="sm">
+                        View Logs
+                      </Button>
+                    </Link>
                   </TableCell>
                 </TableRow>
               ))}
